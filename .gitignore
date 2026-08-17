@@ -1,0 +1,12 @@
+﻿__pycache__/
+*.pyc
+*.bak
+preprocess/status.json
+preprocess/pipeline.log
+outputs/
+inputs/
+preprocess/图库_*/
+preprocess/统计值_*/
+preprocess/日级数据/
+.idea/
+.workbuddy/

@@ -1,0 +1,38 @@
+services:
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+    container_name: report-web
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ../config.json:/app/config.json:ro
+      - ../config_chishi.json:/app/config_chishi.json:ro
+      - ../bridges:/app/bridges:ro
+      - ../templates:/app/templates:ro
+      - ../data:/app/data:ro
+      - ../outputs:/app/outputs
+      # 真实数据目录（按各桥服务器实际路径挂载，可写便于图库/统计值更新）
+      - ../桥数据预处理:/data/bridge:ro
+    environment:
+      - TZ=Asia/Shanghai
+      - REPORT_WEB_HOST=0.0.0.0
+      - REPORT_WEB_PORT=8080
+      - REPORT_WEB_TOKEN=${REPORT_WEB_TOKEN:-}
+
+  report-agent:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: report-agent
+    restart: unless-stopped
+    volumes:
+      - ../config.json:/app/config.json:ro
+      - ../templates:/app/templates:ro
+      - ../data:/app/data:ro
+      - ../outputs:/app/outputs
+    environment:
+      - TZ=Asia/Shanghai
+      - REPORT_AGENT_CONFIG=/app/config.json

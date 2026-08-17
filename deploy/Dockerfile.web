@@ -1,0 +1,24 @@
+# 报告智能体 Web 管理台 + 报告生成 一体化镜像（Python 出图）
+# 用法：docker compose -f deploy/docker-compose.yml up -d --build
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends fonts-wqy-zenhei tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+ENV TZ=Asia/Shanghai
+ENV PYTHONIOENCODING=utf-8
+ENV REPORT_WEB_HOST=0.0.0.0
+ENV REPORT_WEB_PORT=8080
+# 生产环境务必设置访问令牌：
+# ENV REPORT_WEB_TOKEN=change-me
+
+EXPOSE 8080
+CMD ["python", "web/app.py"]

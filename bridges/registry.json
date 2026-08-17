@@ -1,0 +1,67 @@
+{
+  "说明": "六座桥部署注册表。每个条目对应一台独立服务器上的报告智能体实例。config 统一放在项目根目录 config/ 下，相对项目根目录解析。",
+  "更新日期": "2026-08-06",
+  "bridges": [
+    {
+      "id": "chishi",
+      "name": "赤石大桥",
+      "config": "config/config_chishi.json",
+      "host": "222.242.152.65",
+      "port": 8080,
+      "token_env": "BRIDGE_CHISHI_TOKEN",
+      "description": "赤石大桥健康监测数据分析（真实数据已接入桥数据预处理产物）"
+    },
+    {
+      "id": "dongtinghu",
+      "name": "洞庭湖大桥",
+      "config": "config/config.json",
+      "host": "222.242.220.14",
+      "port": 8080,
+      "token_env": "BRIDGE_DONGTINGHU_TOKEN",
+      "description": "洞庭湖大桥（当前为虚拟样例数据，待接真实预处理产物）"
+    },
+    {
+      "id": "mishuihe",
+      "name": "洣水河特大桥",
+      "config": "config/config_mishuihe.json",
+      "host": "218.75.217.159",
+      "port": 8080,
+      "token_env": "BRIDGE_MISHUIHE_TOKEN",
+      "description": "洣水河特大桥——需在各桥服务器创建 config_mishuihe.json"
+    },
+    {
+      "id": "xiangjiang",
+      "name": "湘江特大桥",
+      "config": "config/config_xiangjiang.json",
+      "host": "222.247.255.109",
+      "port": 8080,
+      "token_env": "BRIDGE_XIANGJIANG_TOKEN",
+      "description": "湘江特大桥——需在各桥服务器创建 config_xiangjiang.json"
+    },
+    {
+      "id": "aizhai",
+      "name": "矮寨大桥",
+      "config": "config/config_aizhai.json",
+      "host": "218.76.92.189",
+      "port": 8080,
+      "token_env": "BRIDGE_AIZHAI_TOKEN",
+      "description": "矮寨大桥——需在各桥服务器创建 config_aizhai.json"
+    },
+    {
+      "id": "bridge6",
+      "name": "第六座桥",
+      "config": "",
+      "host": "",
+      "port": 8080,
+      "token_env": "BRIDGE_6_TOKEN",
+      "description": "第六座桥（待确认桥名/服务器）"
+    },
+    {
+      "id": "矮寨大桥",
+      "name": "矮寨大桥",
+      "config": "config/config_矮寨大桥.json",
+      "host": "",
+      "port": 8080
+    }
+  ]
+}

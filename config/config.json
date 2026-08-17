@@ -1,0 +1,197 @@
+{
+  "template": "templates/洞庭湖大桥_template.docx",
+  "output_dir": "outputs",
+  "source_report": "D:/五座桥数据分析文件/洞庭湖大桥.docx",
+  "report": {
+    "name_prefix": "",
+    "with_timestamp": true
+  },
+  "data": {
+    "file": "data/temperature_daily.csv",
+    "date_column": "date",
+    "value_columns": [
+      "temperature",
+      "humidity"
+    ],
+    "thresholds": [
+      30,
+      35
+    ],
+    "strict_mode": false
+  },
+  "data_sources": {
+    "temperature": {
+      "file": "data/temperature_daily.csv",
+      "date_column": "date",
+      "value_columns": [
+        "temperature"
+      ],
+      "label": "环境温度",
+      "unit": "℃"
+    },
+    "humidity": {
+      "file": "data/temperature_daily.csv",
+      "date_column": "date",
+      "value_columns": [
+        "humidity"
+      ],
+      "label": "环境湿度",
+      "unit": "%"
+    },
+    "cable_clamp": {
+      "file": "data/cable_clamp.csv",
+      "date_column": "date",
+      "value_columns": [
+        "h_87L_1",
+        "h_87R_1",
+        "h_88L_1",
+        "h_88R_1",
+        "h_87L_2",
+        "h_87R_2",
+        "h_88L_2",
+        "h_88R_2"
+      ],
+      "label": "索夹滑动位移",
+      "unit": "mm"
+    },
+    "rotation": {
+      "file": "data/rotation.csv",
+      "date_column": "date",
+      "value_columns": [
+        "m_junshan_x",
+        "m_junshan_y",
+        "m_yueyang_x",
+        "m_yueyang_y"
+      ],
+      "label": "梁端转角",
+      "unit": "°"
+    },
+    "wind_speed": {
+      "file": "data/wind_speed.csv",
+      "date_column": "date",
+      "value_columns": [
+        "j_junshan_top",
+        "j_yueyang_top",
+        "j_half_upstream",
+        "j_half_downstream",
+        "j_10min_avg"
+      ],
+      "label": "风速",
+      "unit": "m/s"
+    },
+    "vehicle_count": {
+      "file": "data/vehicle_count.csv",
+      "date_column": "date",
+      "value_columns": [
+        "lane_1",
+        "lane_2",
+        "lane_3",
+        "lane_4",
+        "lane_5",
+        "lane_6"
+      ],
+      "label": "交通荷载",
+      "unit": "辆"
+    }
+  },
+  "llm": {
+    "enabled": true,
+    "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "api_key": "",
+    "model": "qwen-plus",
+    "review_low": 0.38,
+    "review_high": 0.68,
+    "timeout": 300,
+    "batch_size": 20
+  },
+  "charts": {
+    "engine": "python",
+    "output_dir": "outputs/charts",
+    "width_inches": 5.8,
+    "definitions": [
+      {
+        "id": "trend",
+        "type": "line",
+        "title": "温度变化趋势（逐日）",
+        "x_label": "日期",
+        "y_label": "温度（℃）",
+        "column": "temperature"
+      },
+      {
+        "id": "histogram",
+        "type": "histogram",
+        "title": "温度分布直方图",
+        "x_label": "温度（℃）",
+        "y_label": "天数",
+        "column": "temperature",
+        "bins": 10
+      },
+      {
+        "id": "daily_bars",
+        "type": "bar",
+        "title": "每日温度对比",
+        "x_label": "日期",
+        "y_label": "温度（℃）",
+        "column": "temperature"
+      },
+      {
+        "id": "boxplot",
+        "type": "boxplot",
+        "title": "温度分布箱线图",
+        "y_label": "温度（℃）",
+        "column": "temperature"
+      },
+      {
+        "id": "temp_hum_scatter",
+        "type": "scatter",
+        "title": "温度-湿度相关性散点图",
+        "x_label": "温度（℃）",
+        "y_label": "湿度（%）",
+        "x_column": "temperature",
+        "y_column": "humidity"
+      },
+      {
+        "id": "temp_distribution_pie",
+        "type": "pie",
+        "title": "温度区间占比",
+        "column": "temperature",
+        "bins": 5
+      },
+      {
+        "id": "temp_area",
+        "type": "area",
+        "title": "温度变化面积图",
+        "x_label": "日期",
+        "y_label": "温度（℃）",
+        "column": "temperature"
+      },
+      {
+        "id": "temp_hum_multi",
+        "type": "multi_line",
+        "title": "温度与湿度趋势对比",
+        "x_label": "日期",
+        "y_label": "数值",
+        "columns": [
+          "temperature",
+          "humidity"
+        ],
+        "series_labels": [
+          "温度（℃）",
+          "湿度（%）"
+        ]
+      }
+    ]
+  },
+  "schedule": {
+    "mode": "quarterly",
+    "weekday": 1,
+    "day_of_month": 1,
+    "hour": 8,
+    "minute": 0,
+    "use_apscheduler": true
+  },
+  "period": {
+    "weekly_days": 7,
+    "monthly_days": 30
+  }
+}

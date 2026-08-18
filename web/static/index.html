@@ -191,12 +191,12 @@
   <section id="tab-preprocess" style="display:none">
     <div class="panel">
       <h3>数据处理管道（秒级原始数据 → 日级 → 图库/统计值）</h3>
-      <div class="field"><label>秒级数据目录</label><input id="ppRaw" placeholder="如 D:/信科采集软件解析数据"></div>
-      <div class="field"><label>日级数据目录</label><input id="ppDaily" placeholder="预处理输出的日级/小时级数据根目录"></div>
-      <div class="field"><label>图库目录</label><input id="ppCharts" placeholder="如 D:/.../图库"></div>
-      <div class="field"><label>统计值目录</label><input id="ppStats" placeholder="如 D:/.../统计值"></div>
+      <div class="field"><label style="color:var(--bad)">秒级数据目录 *</label><input id="ppRaw" placeholder="必填，如 E:/信科采集软件解析数据"></div>
+      <div class="field"><label style="color:var(--bad)">日级数据目录 *</label><input id="ppDaily" placeholder="必填，预处理输出的日级/小时级数据根目录，如 E:/preprocess_sensor_data"></div>
+      <div class="field"><label>图库目录（可留空自动生成）</label><input id="ppCharts" placeholder="留空=按桥名自动生成 preprocess/图库_<期>/<桥名>"></div>
+      <div class="field"><label>统计值目录（可留空自动生成）</label><input id="ppStats" placeholder="留空=按桥名自动生成 preprocess/统计值_<期>/<桥名>"></div>
       <div class="field"><label>测点编号表格</label><input id="ppMapDocx" placeholder="五座桥测点编号表格.docx 路径（可留空）"></div>
-      <div class="field"><label>桥名</label><input id="ppBridge" placeholder="如 赤石"></div>
+      <div class="field"><label style="color:var(--bad)">桥名 *</label><input id="ppBridge" placeholder="必填，如 洣水河特大桥 / 洣水 / 赤石（自动匹配 config/ 下对应桥配置）"></div>
       <div class="field"><label>起始日期</label><input type="date" id="ppStart" title="只处理该日期之后的秒级数据（可留空=全部）"></div>
       <div class="field"><label>结束日期</label><input type="date" id="ppEnd" title="只处理该日期之前的秒级数据（可留空=全部）"></div>
       <div class="row">
@@ -564,6 +564,11 @@ function loadPreprocessConfig() {
 }
 
 function savePreprocessConfig() {
+  if (!$("ppRaw").value.trim() || !$("ppDaily").value.trim()
+      || !$("ppBridge").value.trim()) {
+    showMsg("秒级数据目录、日级数据目录、桥名为必填项", "err");
+    return;
+  }
   var body = {
     raw_data_dir: $("ppRaw").value.trim(),
     daily_dir: $("ppDaily").value.trim(),
@@ -573,7 +578,12 @@ function savePreprocessConfig() {
     bridge_name: $("ppBridge").value.trim()
   };
   api("/api/preprocess/config", { method: "POST", body: JSON.stringify(body) })
-    .then(function () { showMsg("预处理配置已保存", "ok"); })
+    .then(function (r) {
+      var msg = "预处理配置已保存";
+      if (r.bridge_name) msg += "，已自动更新桥配置：" + r.bridge_name;
+      if (r.bridge_config) msg += "（" + r.bridge_config + "）";
+      showMsg(msg, "ok");
+    })
     .catch(function (e) { showMsg(String(e), "err"); });
 }
 

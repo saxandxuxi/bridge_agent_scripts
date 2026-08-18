@@ -48,8 +48,24 @@ DEFAULT_METRICS = {
 }
 
 
+def _name_match(a: str, b: str) -> bool:
+    """桥名变体匹配：洣水河特大桥 <-> 洣水河 <-> 洣水。"""
+    if not a or not b:
+        return False
+
+    def _strip(x):
+        for s in ("特大桥", "大桥"):
+            if x.endswith(s):
+                return x[: -len(s)]
+        return x
+
+    x, y = _strip(str(a)), _strip(str(b))
+    return x in y or y in x
+
+
 def _latest_dir(pattern: str, bridge_name: str = "") -> str:
-    """取 preprocess 下最新的 图库_* / 统计值_* 目录(含桥名子目录)。"""
+    """取 preprocess 下最新的 图库_* / 统计值_* 目录(含桥名子目录)。
+    只接受与桥名变体匹配的子目录，避免取到其他桥的子目录。"""
     dirs = [d for d in glob.glob(os.path.join(BASE, "preprocess", pattern))
             if os.path.isdir(d)]
     if not dirs:
@@ -59,10 +75,12 @@ def _latest_dir(pattern: str, bridge_name: str = "") -> str:
             if os.path.isdir(os.path.join(top, s))]
     if subs:
         if bridge_name:
-            hit = os.path.join(top, bridge_name)
-            if os.path.isdir(hit):
+            hit = next((p for p in subs
+                        if _name_match(bridge_name, os.path.basename(p))),
+                       None)
+            if hit:
                 return hit
-        return subs[0]
+        return ""   # 没有匹配的桥子目录时返回空，不取别的桥
     return top
 
 
@@ -103,10 +121,15 @@ def find_bridge_assets(bridge_name: str) -> dict:
         with open(os.path.join(BASE, "preprocess", "status.json"), encoding="utf-8") as f:
             status = json.load(f)
         dirs = status.get("dirs") or {}
-        assets["stats_dir"] = dirs.get("stats", "") or _latest_dir(
-            "统计值_*", bridge_name)
-        assets["charts_dir"] = dirs.get("charts", "") or _latest_dir(
-            "图库_*", bridge_name)
+        st = dirs.get("stats", "") or ""
+        ch = dirs.get("charts", "") or ""
+        # status.json 的目录可能属于最近一次运行的其他桥，必须先做桥名匹配
+        assets["stats_dir"] = (
+            st if (_name_match(bridge_name, os.path.basename(os.path.normpath(st))))
+            else "") or _latest_dir("统计值_*", bridge_name)
+        assets["charts_dir"] = (
+            ch if (_name_match(bridge_name, os.path.basename(os.path.normpath(ch))))
+            else "") or _latest_dir("图库_*", bridge_name)
     except Exception:
         assets["stats_dir"] = _latest_dir("统计值_*", bridge_name)
         assets["charts_dir"] = _latest_dir("图库_*", bridge_name)

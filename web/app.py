@@ -1224,11 +1224,22 @@ def api_preprocess_config():
 
 @app.route("/api/preprocess/config", methods=["POST"])
 def api_preprocess_config_save():
-    """保存数据处理管道配置。"""
+    """保存数据处理管道配置。
+
+    秒级数据目录 / 日级数据目录 / 桥名 为必填；
+    图库/统计值目录等可留空（按桥名自动匹配并更新 config/config_<桥>.json
+    的 bridge_data 路径；数据还没生成时留空，pipeline 跑完后自动写回）。
+    """
     auth = _require_token()
     if auth:
         return auth
     data = request.get_json(silent=True) or {}
+    raw = str(data.get("raw_data_dir") or "").strip()
+    daily = str(data.get("daily_dir") or "").strip()
+    bridge_name = str(data.get("bridge_name") or "").strip()
+    if not raw or not daily or not bridge_name:
+        return jsonify({
+            "error": "秒级数据目录、日级数据目录、桥名为必填项"} ), 400
     cfg = {}
     if os.path.isfile(PREPROCESS_CONFIG):
         with open(PREPROCESS_CONFIG, "r", encoding="utf-8") as f:
@@ -1240,7 +1251,59 @@ def api_preprocess_config_save():
     os.makedirs(PREPROCESS_DIR, exist_ok=True)
     with open(PREPROCESS_CONFIG, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
-    return jsonify({"ok": True, "config": cfg})
+
+    # 按桥名自动更新 config/config_<桥>.json 的 bridge_data 路径
+    from report_agent.config import bridge_dir_match
+    cfg_dir = os.path.join(ROOT, "config")
+    bridge_cfg_path, canon_name = None, bridge_name
+    assets = {}
+    if os.path.isdir(cfg_dir):
+        for fn in sorted(os.listdir(cfg_dir)):
+            if not (fn.startswith("config_") and fn.endswith(".json")):
+                continue
+            p = os.path.join(cfg_dir, fn)
+            try:
+                with open(p, encoding="utf-8") as f:
+                    bname = ((json.load(f).get("bridge_data") or {})
+                             .get("bridge_name", "") or "")
+            except Exception:
+                continue
+            if bname and bridge_dir_match(bridge_name, bname):
+                bridge_cfg_path, canon_name = p, bname
+                break
+    if bridge_cfg_path:
+        try:
+            from setup_bridge import find_bridge_assets
+            assets = find_bridge_assets(canon_name)
+            with open(bridge_cfg_path, encoding="utf-8") as f:
+                bcfg = json.load(f)
+            bd = bcfg.setdefault("bridge_data", {})
+            bd["enabled"] = True
+            bd["bridge_name"] = canon_name
+            if assets.get("stats_dir"):
+                bd["stats_dir"] = assets["stats_dir"]
+            if assets.get("charts_dir"):
+                bd["charts_dir"] = assets["charts_dir"]
+            if assets.get("sensor_map"):
+                bd["sensor_map"] = assets["sensor_map"]
+            if assets.get("name_dict"):
+                bd["name_dict"] = assets["name_dict"]
+            if assets.get("stats_dir"):
+                bd["overview"] = os.path.join(
+                    assets["stats_dir"], "总览.json")
+            _save_config(bcfg, bridge_cfg_path)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"ok": True, "config": cfg,
+                            "bridge_config_error": str(exc)})
+
+    return jsonify({
+        "ok": True,
+        "config": cfg,
+        "bridge_config": (os.path.relpath(bridge_cfg_path, ROOT)
+                          if bridge_cfg_path else None),
+        "bridge_name": canon_name,
+        "auto_paths": assets,
+    })
 
 
 @app.route("/api/preprocess/run", methods=["POST"])

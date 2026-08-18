@@ -1,5 +1,5 @@
 {
-  "template": "templates/洣水河特大桥_template_v5.docx",
+  "template": "templates/洣水河特大桥_template.docx",
   "output_dir": ".\\outputs\\reports",
   "source_report": ".\\inputs\\洣水河特大桥.docx",
   "bridge_data": {

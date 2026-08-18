@@ -2242,21 +2242,23 @@ class BridgeData:
             "最终值": value,
         }
         # 最值/差值对应的监测部位（供 {{stats.<metric>.<stat>.loc}} 使用）
-        # 优先读季度/年度统计 全桥统计 里的“<统计量>位置”键（build_quarterly_stats
-        # 生成，与总结段落“对应测点为…”一致）；读不到再按逐传感器数据反推，
+        # 优先按“值 == 最终极值”的逐传感器定位（数值与位置必然对应），
         # 且跳过“季度/年度聚合统计”回退项——回退项会把聚合值复制到每个缺失
-        # 传感器的头上，导致多个传感器同值、最值位置取到第一个而失真。
+        # 传感器的头上，导致多个传感器同值、最值位置取到第一个而失真；
+        # 逐传感器匹配不到时（如聚合来自季度统计回退）再回退 全桥统计 位置键，
+        # 避免出现“值来自某传感器、位置却取到另一测点”的错位。
         feat_for_loc = (dir_feat if metric_dir
                         else self.metrics.get(metric, {}).get("feature", ""))
-        loc = self._agg_feature_location(feat_for_loc, actual)
+        loc = ""
+        real = [d for d in per_sensor
+                if d.get("数据来源") != "季度/年度聚合统计"]
+        pool = real or per_sensor
+        for d in pool:
+            if abs(d["值"] - value) < 1e-9:
+                loc = d.get("监测部位") or ""
+                break
         if not loc:
-            real = [d for d in per_sensor
-                    if d.get("数据来源") != "季度/年度聚合统计"]
-            pool = real or per_sensor
-            for d in pool:
-                if abs(d["值"] - value) < 1e-9:
-                    loc = d.get("监测部位") or ""
-                    break
+            loc = self._agg_feature_location(feat_for_loc, actual)
         if loc:
             detail["位置"] = loc
         return value, detail

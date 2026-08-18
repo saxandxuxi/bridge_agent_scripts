@@ -58,10 +58,46 @@ def list_bridges(registry_path: Optional[str] = None) -> List[Dict]:
 
 
 def get_bridge(bridge_id: str, registry_path: Optional[str] = None) -> Optional[Dict]:
+    # 精确匹配（id 或 name）优先
     for b in list_bridges(registry_path):
         if b.get("id") == bridge_id or b.get("name") == bridge_id:
             return b
+    # 模糊匹配：去掉“大桥/特大桥”后缀后按包含/前缀匹配
+    # （如 --bridge 洣水河特 -> 洣水河特大桥；mishui -> mishuihe）
+    q = _bridge_key(bridge_id)
+    if q:
+        for b in list_bridges(registry_path):
+            if _bridge_key(b.get("name")) == q:
+                return b
+        for b in list_bridges(registry_path):
+            if _bridge_fuzzy(q, b.get("name")):
+                return b
+        for b in list_bridges(registry_path):
+            if _bridge_fuzzy(q, b.get("id")):
+                return b
     return None
+
+
+def _bridge_key(s) -> str:
+    """桥名/ID 归一化：去空白、去“大桥/特大桥”后缀、转小写。"""
+    s = str(s or "").strip().lower()
+    for suffix in ("特大桥", "大桥"):
+        if s.endswith(suffix):
+            s = s[: -len(suffix)]
+    return s
+
+
+def _bridge_fuzzy(query: str, candidate) -> bool:
+    """桥名/ID 模糊匹配：子串/前后缀包含；query 或 candidate 太短时不匹配。"""
+    c = _bridge_key(candidate)
+    if not query or not c or len(query) < 2 or len(c) < 2:
+        return False
+    if query in c or c in query:
+        return True
+    # ID 前缀匹配（mishui -> mishuihe）
+    if len(query) >= 3 and (c.startswith(query) or query.startswith(c)):
+        return True
+    return False
 
 
 def resolve_bridge_config(bridge_id: str, registry_path: Optional[str] = None) -> Optional[str]:

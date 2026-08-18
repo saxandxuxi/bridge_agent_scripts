@@ -889,6 +889,17 @@ def _temp_effect_stats(strain_dates, strain_means, temp_dates, temp_means):
     }
 
 
+def _norm_strain_temp_pos(name):
+    """位置归一化：去掉 上游/下游/左幅/右幅/左侧/右侧 等方位词，
+    用于应变-温度联合统计的跨位置配对（如 顶板左幅 <-> 顶板上游）。
+    保留 顶板/底板/截面/跨/墩 等核心部位，避免把不同截面错配。"""
+    s = str(name or "")
+    for w in ("上游侧", "下游侧", "上游", "下游", "左幅", "右幅",
+              "左侧", "右侧"):
+        s = s.replace(w, "")
+    return re.sub(r"\s+", "", s)
+
+
 def _fmt_cn_dt(s):
     """2026-03-26 14:00 -> 3月26日14时(图上标注用)。"""
     try:
@@ -3172,21 +3183,28 @@ def main():
     if not args.skip_stats:
         # 应变-温度联合统计：同一位置（可能不同传感器）的应变与温度
         # 按日对齐回归，剔除温度效应后写入应变特征(YB(rsg))的统计，
-        # 供报告应变表 “剔除温度最大值/剔除温度最小值/相关性系数” 列使用
+        # 供报告应变表 “剔除温度最大值/剔除温度最小值/相关性系数” 列使用。
+        # 位置名可能因“左幅/右幅”与“上游/下游”写法不一致而对不上，
+        # 先精确配对，失败时按“核心部位归一化”跨位置配对。
+        pos_feats_all = {}
         for pos_name in pos_daily:
-            pos_feats = {}
+            pf = {}
             for sid, feats in pos_daily[pos_name].items():
                 for feat, (dd, mm) in feats.items():
-                    pos_feats.setdefault(feat, []).append((sid, dd, mm))
-            if "YB(rsg)" not in pos_feats:
-                continue
-            temp_keys = [f for f in pos_feats
+                    pf.setdefault(feat, []).append((sid, dd, mm))
+            pos_feats_all[pos_name] = pf
+
+        def _pair_temp(pos_name, pf):
+            """用 pf 里的温度序列给 YB(rsg) 各测点算剔除温度统计。"""
+            if "YB(rsg)" not in pf:
+                return
+            temp_keys = [f for f in pf
                          if f in ("WD(temp)", "WSD(temp)")]
             if not temp_keys:
-                continue
+                return
             # 取同位置第一个温度传感器作为温度序列
-            t_sid, t_dates, t_means = pos_feats[temp_keys[0]][0]
-            for s_sid, s_dates, s_means in pos_feats["YB(rsg)"]:
+            _t_sid, t_dates, t_means = pf[temp_keys[0]][0]
+            for s_sid, s_dates, s_means in pf["YB(rsg)"]:
                 te = _temp_effect_stats(s_dates, s_means,
                                         t_dates, t_means)
                 if not te:
@@ -3195,6 +3213,29 @@ def main():
                     "YB(rsg)")
                 if rec:
                     rec["统计"].update(te)
+
+        # 第一遍：精确位置配对
+        for pos_name, pf in pos_feats_all.items():
+            _pair_temp(pos_name, pf)
+        # 第二遍：核心部位归一化配对（顶板左幅 <-> 顶板上游 等）
+        norm_index = {}
+        for pos_name, pf in pos_feats_all.items():
+            if any(f in ("WD(temp)", "WSD(temp)") for f in pf):
+                norm_index.setdefault(
+                    _norm_strain_temp_pos(pos_name), []).append(pos_name)
+        for pos_name, pf in pos_feats_all.items():
+            if "YB(rsg)" not in pf:
+                continue
+            if any(f in ("WD(temp)", "WSD(temp)") for f in pf):
+                continue   # 已精确配对
+            core = _norm_strain_temp_pos(pos_name)
+            for t_pos in norm_index.get(core, []):
+                if t_pos == pos_name:
+                    continue
+                merged = dict(pf)
+                merged.update(pos_feats_all[t_pos])
+                _pair_temp(pos_name, merged)
+                break
         # 位置统计库(与图库目录结构对齐):
         #   统计值_<期>/<桥名>/位置统计/<位置>/<特征>.json
         #   内容: {位置: {测点X: {统计, 传感器编号}}}（只存整体统计）

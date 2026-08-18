@@ -1206,12 +1206,29 @@ class BridgeData:
             except (TypeError, ValueError):
                 return None
 
-        max_v, min_v = _f("最大值"), _f("最小值")
         avg = _f("平均值")
         miss_h = _f("缺失小时数")
-        max_loc = str(gs.get("最大值位置") or "")
-        min_loc = str(gs.get("最小值位置") or "")
         days = gs.get("覆盖天数") or ""
+        # 极值/位置与 {{stats.<metric>.max|min[.loc]}} 同一口径（逐传感器聚合 +
+        # 季度统计位置键），保证总结句与正文统计占位符一致；
+        # 解析不到时回退到 全桥统计 的极值与位置键
+        max_v = min_v = None
+        max_loc = min_loc = ""
+        if metric:
+            mv, dmax = self.resolve_metric_stat_detail(metric, "max", period)
+            nv, dmin = self.resolve_metric_stat_detail(metric, "min", period)
+            if mv is not None:
+                max_v = float(mv)
+                max_loc = str((dmax or {}).get("位置") or "")
+            if nv is not None:
+                min_v = float(nv)
+                min_loc = str((dmin or {}).get("位置") or "")
+        if max_v is None:
+            max_v = _f("最大值")
+            max_loc = str(gs.get("最大值位置") or "")
+        if min_v is None:
+            min_v = _f("最小值")
+            min_loc = str(gs.get("最小值位置") or "")
 
         # 缺失位置：缺失天数 > 0（整日缺失必报），或缺失小时数达到阈值
         # （默认 72h，bridge_data.summary_miss_hours 可调），或完全无数据
@@ -1275,7 +1292,7 @@ class BridgeData:
             prompts.append("持续为0疑似故障位置：" + "、".join(zero_pos))
         digest_text = "；".join(prompts) + "。"
 
-        # 规则化兜底句
+        # 规则化兜底句（≤100字；恒0与缺失分开表述，避免把“0℃故障”当真实极值）
         parts = []
         if max_v is not None:
             parts.append(f"最高{max_v:g}{unit}" + (f"（{max_loc}）" if max_loc else ""))
@@ -1283,12 +1300,24 @@ class BridgeData:
             parts.append(f"最低{min_v:g}{unit}" + (f"（{min_loc}）" if min_loc else ""))
         if not parts:
             parts.append("整体正常")
-        head = "" if (abnormal or zero_pos) else f"{label}监测数据整体正常，"
-        tail = ""
-        if abnormal or zero_pos:
-            tail = ("；" + "、".join((abnormal or []) + (zero_pos or []))
-                    + "位置存在数据缺失或异常，其余测点正常，需关注。")
-        fallback = (head + "、".join(parts) + tail)[:100]
+        head = "、".join(parts)
+        special = []
+        if zero_pos:
+            special.append("恒0疑似故障位置：" + "、".join(zero_pos[:2])
+                           + ("等" if len(zero_pos) > 2 else ""))
+        if abnormal:
+            special.append("数据缺失位置：" + "、".join(abnormal[:2])
+                           + ("等" if len(abnormal) > 2 else ""))
+        if not special:
+            fallback = f"{label}监测数据整体正常，{head}。"
+        else:
+            fallback = f"{head}；{'；'.join(special)}，其余测点正常，需关注。"
+        if len(fallback) > 100:
+            # 超长时去掉尾句，仍超长则按分号边界截断，不切断词
+            fallback = f"{head}；{'；'.join(special)}。"
+        if len(fallback) > 100:
+            cut = fallback[:100].rfind("；")
+            fallback = (fallback[:cut] if cut > 20 else fallback[:100]) + "。"
         return {"prompt": digest_text, "fallback": fallback}
 
     def _feature_stats(self, sensor_id: str, metric: str, feature: str = "") -> Optional[Dict]:

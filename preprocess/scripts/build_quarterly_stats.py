@@ -352,8 +352,9 @@ def main():
             "说明": _label + "(按特征汇总全桥，取各测点整体统计比较："
                     "最大值取各测点最大、最小值取各测点最小、"
                     "绝对最大值取各测点最大、差值取各测点最大、"
-                    "平均值取各测点平均；数据来自统计库 位置统计/ 下的"
-                    "逐测点整体统计)",
+                    "平均值取各测点平均；整季恒为0的疑似故障测点不参与"
+                    "极值/均值统计，位置记入 持续为0位置；数据来自统计库 "
+                    "位置统计/ 下的逐测点整体统计)",
             "生成时间": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "桥": {},
         }
@@ -374,6 +375,19 @@ def main():
                           for pt in pts.values()]
             if not st_records:
                 continue
+            # 恒0（疑似故障）测点：整季 最大值==最小值==0（如结构温度传感器
+            # 一直为0），不应参与全桥极值/均值统计，否则会把“最低0℃”当成
+            # 真实极值；单独记录 持续为0位置 供总结段落引用。
+            def _is_zero(st):
+                try:
+                    return (float(st.get("最大值") or 0) == 0.0
+                            and float(st.get("最小值") or 0) == 0.0)
+                except (TypeError, ValueError):
+                    return False
+            zero_positions = sorted({pos for pos, st in st_records
+                                     if _is_zero(st)})
+            st_records = [r for r in st_records if not _is_zero(r[1])] \
+                or st_records
             def _f(key, agg):
                 vals = []
                 for _pos, s in st_records:
@@ -445,6 +459,8 @@ def main():
                 "最小值_实测": _f("最小值_实测", min),
                 "绝对最大值": _f("绝对最大值", max),
                 "均方根值": _f("均方根值", max),
+                # 恒0疑似故障位置（如“…一直为0℃，为传感器故障导致”）
+                "持续为0位置": zero_positions,
                 # 极值对应的监测部位（供总结段落“对应测点为…/对应位置为…”引用）
                 "最大值位置": _max_p or "",
                 "最小值位置": _min_p or "",

@@ -45,7 +45,8 @@
       "displacement": {
         "feature": "GNSS(Δx)",
         "unit": "mm",
-        "label": "空间变位"
+        "label": "空间变位",
+        "exclude_position_words": ["边坡"]
       },
       "bearing_displacement": {
         "feature": "WY(Δx)",

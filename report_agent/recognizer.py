@@ -2368,7 +2368,17 @@ def annotate_docx(src: str, dst: str, llm_cfg: Optional[dict] = None,
                 sentence = clause
         best_metric = _nearest_word(sentence, len(sentence), 60, METRIC_WORDS,
                                     skip={"load", "vehicle_count"})
+        # “结构温度/支座位移”等更具体指标覆盖子句里的裸“温度/位移”
+        sent_full = t[sent_start:pos]
+        if "结构温度" in sent_full:
+            best_metric = "structure_temperature"
+        elif "支座位移" in sent_full:
+            best_metric = "bearing_displacement"
         best_stat = _nearest_word(sentence, len(sentence), 12, STAT_WORDS)
+        # “最大应变差值/应变最大差值/最大X差值”等跨词词组 -> range
+        # （如“最大应变差值”中间夹着指标词，_nearest_word 只会匹配到“最大”->max）
+        if re.search(r"(?:最大|最小).{0,4}差值", sentence):
+            best_stat = "range"
         if not best_metric or not best_stat or best_metric not in UPGRADE_METRICS:
             return marker
         return f"{{{{stats.{best_metric}.{best_stat}}}}}"
@@ -2384,7 +2394,7 @@ def annotate_docx(src: str, dst: str, llm_cfg: Optional[dict] = None,
         metric, stat = m.group(1), m.group(2)
         t = str(texts_all[para_idx]) if 0 <= para_idx < len(texts_all) else ""
         win = t[max(0, pos - 12):pos]
-        if "最大差值" in win or "最小差值" in win:
+        if re.search(r"(?:最大|最小).{0,4}差值", win):
             expect = "range"
         elif "最高" in win or "最大" in win:
             expect = "max"

@@ -375,6 +375,12 @@ def main():
                           for pt in pts.values()]
             if not st_records:
                 continue
+            # GNSS 位移：排除“边坡”测点——其 GNSS(Δx/Δy/Δz) 统计是大地坐标
+            # 绝对值而非桥体位移，会把全桥极值污染成几米/几百米
+            if feat.startswith("GNSS("):
+                st_records = [r for r in st_records if "边坡" not in r[0]]
+                if not st_records:
+                    continue
             # 恒0（疑似故障）测点：整季 最大值==最小值==0（如结构温度传感器
             # 一直为0），不应参与全桥极值/均值统计，否则会把“最低0℃”当成
             # 真实极值；单独记录 持续为0位置 供总结段落引用。

@@ -782,6 +782,16 @@ class BridgeData:
                          or _bridge_name_match(
                              self.sensor_map[sid].get("桥名", ""),
                              self.bridge_name))]
+        # 指标级排除（如 displacement 排除“边坡”测点——其 GNSS 统计是
+        # 大地坐标绝对值而非桥体位移，会把极值污染成几米/几百米）
+        _m = re.match(r"^(.*)_([xyz])$", metric)
+        mkey = _m.group(1) if _m else metric
+        excl_words = [w for w in (self.metrics.get(mkey, {}) or {}).get(
+            "exclude_position_words") or [] if w]
+        if excl_words:
+            sids = [sid for sid in sids
+                    if not any(w in self._position_for_sensor(sid)
+                               for w in excl_words)]
         return sorted(sids, key=lambda x: int(x) if x.isdigit() else x)
 
     def _is_excluded(self, sensor_id: str) -> bool:

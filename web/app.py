@@ -140,7 +140,22 @@ def _quarter_dirs(cfg: Optional[Dict], label: str) -> tuple:
 
 
 def _dir_nonempty(path: str) -> bool:
-    return bool(os.path.isdir(path) and any(True for _ in os.scandir(path)))
+    """判断目录是否已有实际数据产物（图：png/jpg；统计：json/csv/xlsx）。
+    忽略纯记录文件（生成失败记录.txt 等）与空子目录，避免“空目录/失败残留”
+    被误判为数据就绪。"""
+    if not os.path.isdir(path):
+        return False
+    try:
+        for _root, _dirs, files in os.walk(path):
+            for fn in files:
+                low = fn.lower()
+                if low.endswith((".png", ".jpg", ".jpeg", ".csv", ".xlsx")):
+                    return True
+                if low.endswith(".json") and fn != "总览.json":
+                    return True
+    except OSError:
+        return False
+    return False
 
 
 # ---------------------------------------------------------------------------

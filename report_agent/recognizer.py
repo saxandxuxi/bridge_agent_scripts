@@ -813,6 +813,14 @@ def _classify_tag(tag: dict, texts: list) -> None:
             sentence = clause
     best_metric = _nearest_word(sentence, len(sentence), 60, METRIC_WORDS,
                                 skip={"load", "vehicle_count"})
+    # “结构温度/支座位移”等更具体的指标覆盖子句里的裸“温度/位移”：
+    # 如“…结构温度最高为[C-MAX]；温度最低为[C-MIN]”里 [C-MIN] 子句只含
+    # “温度”，但整句主语是结构温度，不能误判成环境温度。
+    sent_full = t[sent_start:pos]
+    if "结构温度" in sent_full:
+        best_metric = "structure_temperature"
+    elif "支座位移" in sent_full:
+        best_metric = "bearing_displacement"
     # F-MAX / F-MIN：剔除温度效应后的应变最大/最小差值（残差），
     # 与普通 E-MAX 不同，映射到 temp_rm_range / temp_rm_min；
     # 对应位置标记取“差值”本身的最值位置（temp_rm_range.loc），

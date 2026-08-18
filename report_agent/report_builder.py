@@ -993,6 +993,25 @@ def build_report(
     current_prefix = ""          # 章节号（如 3.1.1）
     fig_counters: Dict[str, int] = {}
     global_fig_no = 0
+    # 预处理：连续同图占位符去重——合并图库“一位置一张图”，模板可能按原报告
+    # 拆出多个同位置占位符（如振动多传感器 433/436/468/469）。连续解析到同一
+    # 张图片时只保留第一个，重复图段落清空，避免一模一样的图刷屏。
+    _prev_chart_png = None
+    for _item in list(iter_block_items(doc)):
+        if not isinstance(_item, Paragraph):
+            _prev_chart_png = None
+            continue
+        _t = _paragraph_text(_item).strip()
+        _m = MARKER_RE.fullmatch(_t)
+        if _m and _m.group(1).startswith("chart."):
+            _cid = _m.group(1).split(".", 1)[1]
+            _png = chart_images.get(_cid)
+            if _png and _png == _prev_chart_png:
+                _item.clear()
+                continue
+            _prev_chart_png = _png
+        else:
+            _prev_chart_png = None
     for item in iter_block_items(doc):
         if isinstance(item, Paragraph):
             _process_conditional_blocks(item, resolver)

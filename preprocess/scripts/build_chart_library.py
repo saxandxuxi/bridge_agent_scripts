@@ -900,6 +900,13 @@ def _norm_strain_temp_pos(name):
     return re.sub(r"\s+", "", s)
 
 
+# 允许“应变-温度跨方位配对”的大桥：编号文件里应变用 左幅/右幅、
+# 结构温度用 上游/下游，两套命名无法精确配对。
+# 对这些桥：同一核心部位(如 炎陵侧中跨1/4截面顶板)的温度序列，
+# 同时配给 左幅/右幅 的应变计算 剔除温度/相关性系数。
+STRAIN_TEMP_CROSS_SIDE_BRIDGES = {"洣水河", "洣水河特大桥", "mishuihe"}
+
+
 def _fmt_cn_dt(s):
     """2026-03-26 14:00 -> 3月26日14时(图上标注用)。"""
     try:
@@ -3202,8 +3209,14 @@ def main():
                          if f in ("WD(temp)", "WSD(temp)")]
             if not temp_keys:
                 return
-            # 取同位置第一个温度传感器作为温度序列
-            _t_sid, t_dates, t_means = pf[temp_keys[0]][0]
+            # 取同位置温度序列：优先选非恒值(有正常波动)的温度传感器，
+            # 避免取到“整季恒0”的故障传感器导致相关系数失真
+            temp_entries = pf[temp_keys[0]]
+            _t_sid, t_dates, t_means = temp_entries[0]
+            for _tsid, _tdd, _tmm in temp_entries:
+                if _tmm and (max(_tmm) - min(_tmm)) > 1e-9:
+                    _t_sid, t_dates, t_means = _tsid, _tdd, _tmm
+                    break
             for s_sid, s_dates, s_means in pf["YB(rsg)"]:
                 te = _temp_effect_stats(s_dates, s_means,
                                         t_dates, t_means)
@@ -3217,25 +3230,30 @@ def main():
         # 第一遍：精确位置配对
         for pos_name, pf in pos_feats_all.items():
             _pair_temp(pos_name, pf)
-        # 第二遍：核心部位归一化配对（顶板左幅 <-> 顶板上游 等）
-        norm_index = {}
-        for pos_name, pf in pos_feats_all.items():
-            if any(f in ("WD(temp)", "WSD(temp)") for f in pf):
-                norm_index.setdefault(
-                    _norm_strain_temp_pos(pos_name), []).append(pos_name)
-        for pos_name, pf in pos_feats_all.items():
-            if "YB(rsg)" not in pf:
-                continue
-            if any(f in ("WD(temp)", "WSD(temp)") for f in pf):
-                continue   # 已精确配对
-            core = _norm_strain_temp_pos(pos_name)
-            for t_pos in norm_index.get(core, []):
-                if t_pos == pos_name:
+        # 第二遍：核心部位归一化配对（顶板左幅 <-> 顶板上游 等）。
+        # 仅对配置名单内的大桥生效（洣水河编号文件应变/温度方位命名不一致），
+        # 其他桥仍只做精确配对，避免不同方位传感器被错误跨配。
+        cross_side = any(v in STRAIN_TEMP_CROSS_SIDE_BRIDGES
+                         for v in _bridge_variants(bridge))
+        if cross_side:
+            norm_index = {}
+            for pos_name, pf in pos_feats_all.items():
+                if any(f in ("WD(temp)", "WSD(temp)") for f in pf):
+                    norm_index.setdefault(
+                        _norm_strain_temp_pos(pos_name), []).append(pos_name)
+            for pos_name, pf in pos_feats_all.items():
+                if "YB(rsg)" not in pf:
                     continue
-                merged = dict(pf)
-                merged.update(pos_feats_all[t_pos])
-                _pair_temp(pos_name, merged)
-                break
+                if any(f in ("WD(temp)", "WSD(temp)") for f in pf):
+                    continue   # 已精确配对
+                core = _norm_strain_temp_pos(pos_name)
+                for t_pos in norm_index.get(core, []):
+                    if t_pos == pos_name:
+                        continue
+                    merged = dict(pf)
+                    merged.update(pos_feats_all[t_pos])
+                    _pair_temp(pos_name, merged)
+                    break
         # 位置统计库(与图库目录结构对齐):
         #   统计值_<期>/<桥名>/位置统计/<位置>/<特征>.json
         #   内容: {位置: {测点X: {统计, 传感器编号}}}（只存整体统计）

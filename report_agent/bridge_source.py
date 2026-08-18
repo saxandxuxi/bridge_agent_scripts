@@ -1320,6 +1320,29 @@ class BridgeData:
             fallback = (fallback[:cut] if cut > 20 else fallback[:100]) + "。"
         return {"prompt": digest_text, "fallback": fallback}
 
+    @staticmethod
+    def _constant_faulty(fstats: Dict, feature: str) -> bool:
+        """恒值传感器判定：整季 最大值==最小值（如一直为0/恒值）视为故障或
+        无效数据，对应表格行应填“—”，且不参与 stats.* 聚合。
+        例外：裂缝(LF)/挠度(ND)/风速(spfs,szfs) 等“0为正常值”的特征，
+        恒为 0 属正常状态，不算故障。"""
+        if not isinstance(fstats, dict):
+            return False
+        try:
+            mx = float(fstats.get("最大值"))
+            mn = float(fstats.get("最小值"))
+        except (TypeError, ValueError):
+            return False
+        if abs(mx - mn) > 1e-9:
+            return False
+        m = re.search(r"\(([^)]+)\)$", str(feature or ""))
+        code = (m.group(1) if m else "").lower()
+        zero_ok = (code in ("nd", "spfs", "szfs")
+                   or str(feature or "").upper().startswith("LF"))
+        if zero_ok and mx == 0.0:
+            return False
+        return True
+
     def _feature_stats(self, sensor_id: str, metric: str, feature: str = "") -> Optional[Dict]:
         data = self._load_sensor_stats(sensor_id)
         feat = feature or self.metrics.get(metric, {}).get("feature", "")
@@ -1403,6 +1426,10 @@ class BridgeData:
                      feature: str = "") -> Optional[float]:
         """读取单个传感器（可指定特征）在报告期内的统计值。"""
         fstats = self._feature_stats(sensor_id, metric, feature=feature)
+        if fstats and self._constant_faulty(
+                fstats, feature or self.metrics.get(metric, {}).get("feature", "")):
+            # 恒值传感器视为故障/无效：整行填“—”，不参与聚合
+            return None
         if not fstats:
             return self._aggregate_sensor_stat(sensor_id, metric, stat,
                                                feature=feature)
@@ -1434,6 +1461,10 @@ class BridgeData:
                      feature: str = "") -> Optional[Dict]:
         """单个传感器统计 + 数据来源明细；读不到返回 None。"""
         fstats = self._feature_stats(sensor_id, metric, feature=feature)
+        if fstats and self._constant_faulty(
+                fstats, feature or self.metrics.get(metric, {}).get("feature", "")):
+            # 恒值传感器视为故障/无效：整行填“—”，不参与聚合
+            return None
         if not fstats:
             v = self._aggregate_sensor_stat(sensor_id, metric, stat,
                                             feature=feature)

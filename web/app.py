@@ -932,8 +932,27 @@ def api_bridge_chart(bridge_id, filename):
     return jsonify({"error": "图片不存在"}), 404
 
 
+def _canon_bridge_name(name: str) -> str:
+    """把用户填的桥名(洣水/洣水河/洣水河特大桥)规范为 config 里的全名。"""
+    from report_agent.config import bridge_dir_match
+    cfg_dir = os.path.join(ROOT, "config")
+    if os.path.isdir(cfg_dir):
+        for fn in sorted(os.listdir(cfg_dir)):
+            if not (fn.startswith("config_") and fn.endswith(".json")):
+                continue
+            try:
+                with open(os.path.join(cfg_dir, fn), encoding="utf-8") as f:
+                    bname = ((json.load(f).get("bridge_data") or {})
+                             .get("bridge_name", "") or "")
+            except Exception:
+                continue
+            if bname and bridge_dir_match(name, bname):
+                return bname
+    return name
+
+
 def _run_pipeline(period: Dict, charts_dir: str, stats_dir: str,
-                  st: Dict) -> int:
+                  st: Dict, bridge: str = "") -> int:
     """调用 pipeline.py 完成 秒级->日级->图库/统计值->对照表。
     返回子进程退出码。"""
     pcfg = {}
@@ -950,6 +969,8 @@ def _run_pipeline(period: Dict, charts_dir: str, stats_dir: str,
            "--raw", raw, "--daily", daily,
            "--charts", charts_dir, "--stats", stats_dir,
            "--start", period["start"], "--end", period["end"]]
+    if bridge:
+        cmd += ["--bridge", bridge]
     if map_docx:
         cmd += ["--sensor-map-docx", map_docx]
     st["pipeline_cmd"] = " ".join(cmd)
@@ -1074,7 +1095,10 @@ def api_bridge_run(bridge_id):
             if auto_preprocess:
                 if not data_ready:
                     st["preprocess"] = "running"
-                    rc = _run_pipeline(period, charts_dir, stats_dir, st)
+                    rc = _run_pipeline(
+                        period, charts_dir, stats_dir, st,
+                        bridge=((cfg.get("bridge_data") or {})
+                                .get("bridge_name") or ""))
                     st["preprocess"] = "done" if rc == 0 else "failed"
                     if rc != 0:
                         st["error"] = ("数据预处理失败，详见 pipeline 日志。"
@@ -1340,6 +1364,17 @@ def api_preprocess_run():
     for k, v in flags.items():
         if v:
             cmd += [f"--{k}", str(v)]
+    # 桥名必传：daily 输出按 <桥名>/daily_<期> 分目录（用规范全名）
+    bridge_name = str(data.get("bridge_name") or "").strip()
+    if not bridge_name:
+        try:
+            with open(PREPROCESS_CONFIG, "r", encoding="utf-8") as f:
+                bridge_name = str((json.load(f) or {}).get(
+                    "bridge_name") or "").strip()
+        except Exception:
+            pass
+    if bridge_name:
+        cmd += ["--bridge", _canon_bridge_name(bridge_name)]
     # 时间范围（只处理该时间段数据）
     start = str(data.get("start") or "").strip()
     end = str(data.get("end") or "").strip()

@@ -2065,6 +2065,30 @@ class BridgeData:
                         # 逐传感器统计（跳过“季度/年度聚合”回退值，回退值会
                         # 把全桥聚合复制到每个缺失传感器上，导致多行同值）。
                         order = sids[row_index % len(sids):] + sids[:row_index % len(sids)]
+                        # 恒值传感器（整季恒0/恒值）：该测点整行填“—”，
+                        # 不“顺延”到同位置其他传感器，避免坏测点串成好测点值
+                        if order:
+                            _primary = str(order[0])
+                            _feat = self.metrics.get(metric, {}).get("feature", "")
+                            _pf = self._feature_stats(_primary, metric,
+                                                      feature=_feat)
+                            if _pf and self._constant_faulty(_pf, _feat):
+                                return None, {
+                                    "占位符": f"cell.{metric}.{column}.{stat}",
+                                    "结果": "未找到",
+                                    "原因": f"测点 {column} 对应传感器恒值"
+                                            f"(疑似故障)，整行填“—”",
+                                    "分支": "名称对照位置-按行取传感器",
+                                    "监测部位": pos,
+                                    "表格标题": table_title,
+                                    "表格行号": row_index + 1,
+                                    "传感器": {
+                                        "传感器编号": _primary,
+                                        "监测部位": self._position_for_sensor(
+                                            _primary),
+                                        "特征": _feat,
+                                    },
+                                }
                         if val is None:
                             for sid in order:
                                 d_try = self._stat_detail(sid, metric, actual, period)

@@ -222,8 +222,9 @@ def main() -> int:
         ]
         if args.bridge:
             cmd += ["--bridge", args.bridge]
-        if args.skip_per_sensor:
-            cmd += ["--skip-per-sensor"]
+        # 建图库固定跳过逐传感器图，只生成按监测部位合并的图（更省时，
+        # 报告只用合并图）
+        cmd += ["--skip-per-sensor"]
         # 图库/统计值目录名自动带年月范围（如 图库_2026.1~3）；
         # 仅命令行显式指定 --charts/--stats 时才用固定目录
         if args.charts:

@@ -289,7 +289,8 @@ def main() -> int:
     # 3) 测点编号表格 -> 传感器对照表
     if not args.skip_sensor_map and map_docx and os.path.isfile(map_docx):
         # 传感器对照表是固定产物（不随季度变化），统一放在 preprocess/传感器对照/
-        map_dir = os.path.join(ROOT, "preprocess", "传感器对照")
+        # 注意：ROOT 本身已是 preprocess/ 目录，不能再拼一层 preprocess
+        map_dir = os.path.join(ROOT, "传感器对照")
         os.makedirs(map_dir, exist_ok=True)
         out_map = os.path.join(map_dir, "传感器编号名称.json")
         ok = run_step("测点编号表格->传感器对照表", [

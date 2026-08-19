@@ -36,6 +36,8 @@ import statistics
 import difflib
 from typing import Dict, List, Optional
 
+from report_agent.config import resolve_bridge_subdir
+
 log = logging.getLogger("report-agent.bridge")
 
 
@@ -280,6 +282,13 @@ class BridgeData:
 
         self.stats_dir = self._resolve(cfg.get("stats_dir", ""))
         self.charts_dir = self._resolve(cfg.get("charts_dir", ""))
+        # 目录名可能用桥名全称/简称（洣水河特大桥 <-> 洣水河），
+        # 这里再做一次模糊下钻，避免配置里的桥名写法与实际目录不一致导致加载失败
+        if self.bridge_name:
+            self.stats_dir = resolve_bridge_subdir(
+                self.stats_dir, self.bridge_name)
+            self.charts_dir = resolve_bridge_subdir(
+                self.charts_dir, self.bridge_name)
         self.sensor_map_path = self._resolve(cfg.get("sensor_map", ""))
         self.overview_path = self._resolve(cfg.get("overview", ""))
         self.name_dict_path = self._resolve(cfg.get("name_dict", ""))
@@ -410,6 +419,8 @@ class BridgeData:
             # 2c. 位置统计库：统计值_<期>/<桥名>/位置统计/<位置>.json
             # （以“位置→测点→特征→统计”为准，传感器编号 JSON 已弃用）
             self._load_position_stats()
+            if self.charts_dir and not os.path.isdir(self.charts_dir):
+                log.warning("图库目录不存在: %s", self.charts_dir)
 
             self.loaded = True
         except Exception as exc:  # noqa: BLE001
@@ -923,6 +934,9 @@ class BridgeData:
         """
         pos_dir = os.path.join(self.stats_dir, "位置统计")
         if not os.path.isdir(pos_dir):
+            log.warning(
+                "位置统计目录不存在: %s（请检查 config bridge_data.stats_dir "
+                "指向的目录名/结构；上一期成功时该目录应存在）", pos_dir)
             return
         def _index_pos(pos, points):
             """索引测点结构。

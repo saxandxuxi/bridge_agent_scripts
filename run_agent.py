@@ -9,7 +9,8 @@
   python run_agent.py --mode weekly --date 2026-08-04   # 指定报告结束日
   python run_agent.py --engine python          # 强制使用 Python 出图
   python run_agent.py --inspect-template       # 识别模板中需要替换的数据
-  python run_agent.py --bridge chishi --mode quarterly   # 按桥梁注册表生成
+  python run_agent.py --bridge chishi --mode quarterly --year 2026 --quarter 1
+                                               # 按季度号生成（第1季度）
   python run_agent.py --list-bridges           # 列出所有已注册桥梁
 """
 
@@ -45,6 +46,10 @@ def main() -> int:
     parser.add_argument("--mode", choices=["weekly", "monthly", "quarterly", "yearly", "manual"], default=None,
                         help="报告模式：weekly=周报，monthly=月报，quarterly=季度报，yearly=年度报，manual=手动")
     parser.add_argument("--date", default=None, help="报告结束日期 YYYY-MM-DD（默认今天）")
+    parser.add_argument("--quarter", type=int, default=None,
+                        help="季度号 1~4（仅 --mode quarterly 使用，如 --quarter 1）")
+    parser.add_argument("--year", type=int, default=None,
+                        help="报告年份（默认今年；配合 --quarter 使用，如 --year 2026 --quarter 1）")
     parser.add_argument("--engine", choices=["auto", "matlab", "python"], default=None,
                         help="图表引擎：auto 自动选择，matlab 强制 MATLAB，python 强制 matplotlib")
     parser.add_argument("--template", default=None,
@@ -90,10 +95,35 @@ def main() -> int:
             print(f"\n识别结果已保存: {out}")
             return 0
 
+        report_date = args.date
+        if (args.mode == "quarterly" and args.quarter is None
+                and not args.date):
+            # 未指定季度/日期：默认最近一个已完整结束的季度
+            from report_agent.agent import last_completed_quarter
+            args.year, args.quarter = last_completed_quarter()
+        if args.mode == "quarterly" and args.quarter is not None:
+            if not 1 <= args.quarter <= 4:
+                print(f"[错误] 季度必须是 1~4，收到: {args.quarter}", file=sys.stderr)
+                return 1
+            from report_agent.agent import quarter_range
+            year = args.year or dt.date.today().year
+            start, end = quarter_range(year, args.quarter)
+            if end > dt.date.today():
+                print(
+                    f"[错误] 第{args.quarter}季度（{start.isoformat()} ~ "
+                    f"{end.isoformat()}）尚未结束，请等该季度过完后再生成。",
+                    file=sys.stderr,
+                )
+                return 1
+            report_date = end.isoformat()
+        elif args.quarter is not None:
+            print("[错误] --quarter 只能在 --mode quarterly 时使用", file=sys.stderr)
+            return 1
+
         summary = run_once(
             config_path=args.config,
             mode=args.mode,
-            report_date=args.date,
+            report_date=report_date,
             engine=args.engine,
             template_override=args.template,
         )

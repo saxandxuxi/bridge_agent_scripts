@@ -1,21 +1,19 @@
 # -*- coding: utf-8 -*-
 """报告智能体 Web 管理台。
 
-两种运行模式：
-  bridge（默认）：本服务管理本机的一个/多个桥配置，提供运行、下载、覆盖度等接口。
-  hub：部署在中心服务器（如 222.242.152.65），汇总各桥服务器的状态并提供跳转。
+没有中心服务器：本服务只管理本机部署的桥配置（通常一台独立服务器对应一座桥），
+提供运行、下载、覆盖度、模板解析、调度器控制等接口。
+原始监测数据只存储在各桥自己的服务器上，本服务不跨服务器传输数据。
 
 环境变量：
   REPORT_WEB_HOST        监听地址（默认 127.0.0.1，公网请用 nginx 反代 + HTTPS）
-  REPORT_WEB_PORT        端口（默认 8080）
+  REPORT_WEB_PORT        端口（默认 8456）
   REPORT_WEB_TOKEN       访问令牌；为空时不鉴权（仅建议本机调试）
-  REPORT_WEB_MODE        bridge | hub（默认 bridge）
   REPORT_WEB_REGISTRY    桥梁注册表路径（默认 bridges/registry.json）
   REPORT_PROJECT_ROOT    项目根目录（默认自动推断）
 
 启动：
-  python web/app.py
-  REPORT_WEB_TOKEN=xxx python web/app.py
+  set REPORT_WEB_TOKEN=xxx && python web/app.py
 """
 
 import datetime as dt
@@ -46,7 +44,6 @@ logging.basicConfig(
 )
 
 WEB_TOKEN = os.environ.get("REPORT_WEB_TOKEN", "")
-WEB_MODE = os.environ.get("REPORT_WEB_MODE", "bridge")
 REGISTRY = os.environ.get("REPORT_WEB_REGISTRY", os.path.join(ROOT, "bridges", "registry.json"))
 
 PREPROCESS_DIR = os.path.join(ROOT, "preprocess")
@@ -66,22 +63,50 @@ _schedulers: Dict[str, Dict] = {}
 # 周期 / 季度工具
 # ---------------------------------------------------------------------------
 
-def _period_from_mode(mode: str, date_str: str = "") -> Dict:
+def _period_from_mode(mode: str, date_str: str = "",
+                      quarter: str = "", year: str = "") -> Dict:
     """按报告模式计算周期，返回 {start, end, label}。
-    label 示例: quarterly -> 2026.1~3 / 2026.4~6；monthly -> 2026.07。"""
+    label 示例: quarterly -> 2026.1~3 / 2026.4~6；monthly -> 2026.07。
+
+    quarterly 模式优先用季度号（quarter=1~4，year 默认今年）定位，
+    不再需要具体日期；季度尚未结束时抛出 ValueError（由调用方转成报错）。
+    未给季度号也未给日期时，默认取最近一个已完整结束的季度。
+    """
     import calendar
+    from report_agent.period_utils import last_completed_quarter, quarter_range
+    if mode == "quarterly":
+        if str(quarter).strip():
+            try:
+                q = int(quarter)
+                y = int(year) if str(year).strip() else dt.date.today().year
+            except (TypeError, ValueError):
+                raise ValueError(f"季度/年份无效: quarter={quarter}, year={year}")
+            start, end = quarter_range(y, q)
+            if end > dt.date.today():
+                raise ValueError(
+                    f"第{q}季度（{start.isoformat()} ~ {end.isoformat()}）尚未结束，"
+                    f"请等该季度过完后再生成。")
+        elif not date_str:
+            y, q = last_completed_quarter()
+            start, end = quarter_range(y, q)
+        else:
+            start = end = dt.date.fromisoformat(date_str)
+            q = (end.month - 1) // 3 + 1
+            y = end.year
+            ms = (q - 1) * 3 + 1
+            me = q * 3
+            start = dt.date(y, ms, 1)
+            end = dt.date(y, me, calendar.monthrange(y, me)[1])
+        label = f"{y}.{start.month}~{end.month}"
+        return {"start": start.isoformat(), "end": end.isoformat(),
+                "label": label}
+
     end = dt.date.fromisoformat(date_str) if date_str else dt.date.today()
     mode = mode or "quarterly"
     if mode == "yearly":
         start = dt.date(end.year, 1, 1)
         end = dt.date(end.year, 12, 31)
         label = f"{end.year}年"
-    elif mode == "quarterly":
-        q = (end.month - 1) // 3 + 1
-        ms, me = (q - 1) * 3 + 1, q * 3
-        start = dt.date(end.year, ms, 1)
-        end = dt.date(end.year, me, calendar.monthrange(end.year, me)[1])
-        label = f"{end.year}.{ms}~{me}"
     elif mode == "monthly":
         start = dt.date(end.year, end.month, 1)
         end = dt.date(end.year, end.month,
@@ -225,7 +250,7 @@ def _bridge_snapshot(bridge: Dict) -> Dict:
         "id": bid,
         "name": bridge.get("name", bid),
         "host": bridge.get("host", ""),
-        "port": bridge.get("port", 8080),
+        "port": bridge.get("port", 8456),
         "token_env": bridge.get("token_env", ""),
         "description": bridge.get("description", ""),
         "config": bridge.get("config", ""),
@@ -301,7 +326,6 @@ def api_status():
         return auth
     return jsonify({
         "ok": True,
-        "mode": WEB_MODE,
         "project_root": ROOT,
         "time": dt.datetime.now().isoformat(timespec="seconds"),
         "registry": REGISTRY,
@@ -376,8 +400,11 @@ def api_bridge_config_update(bridge_id):
         sch = data["schedule"]
         if sch.get("mode") in ("weekly", "monthly", "quarterly", "yearly"):
             cfg.setdefault("schedule", {})["mode"] = sch["mode"]
-        for k in ("weekday", "day_of_month", "hour", "minute"):
+        for k in ("weekday", "day_of_month", "hour", "minute", "start_date"):
             if k in sch and sch[k] is not None:
+                if k == "start_date":
+                    cfg.setdefault("schedule", {})[k] = str(sch[k]).strip()
+                    continue
                 try:
                     cfg.setdefault("schedule", {})[k] = int(sch[k])
                 except (TypeError, ValueError):
@@ -1040,7 +1067,7 @@ def _update_bridge_data_dirs(bridge_id: str, stats_dir: str,
 
 @app.route("/api/bridges/<bridge_id>/period")
 def api_bridge_period(bridge_id):
-    """按模式/日期计算周期，返回季度目录及数据是否就绪。"""
+    """按模式/季度号计算周期，返回季度目录及数据是否就绪。"""
     auth = _require_token()
     if auth:
         return auth
@@ -1049,12 +1076,17 @@ def api_bridge_period(bridge_id):
         return jsonify({"error": "配置不可用"}), 404
     mode = request.args.get("mode", "quarterly")
     date = request.args.get("date", "")
+    quarter = request.args.get("quarter", "")
+    year = request.args.get("year", "")
     start = request.args.get("start", "")
     end = request.args.get("end", "")
     if start and end:
         period = {"start": start, "end": end, "label": _label_from_range(start, end)}
     else:
-        period = _period_from_mode(mode, date)
+        try:
+            period = _period_from_mode(mode, date, quarter, year)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
     charts_dir, stats_dir = _quarter_dirs(cfg, period["label"])
     return jsonify({
         **period,
@@ -1081,6 +1113,8 @@ def api_bridge_run(bridge_id):
     if mode not in ("weekly", "monthly", "quarterly", "yearly", "manual"):
         return jsonify({"error": f"无效模式: {mode}"}), 400
     date = str(data.get("date") or "").strip()
+    quarter = str(data.get("quarter") or "").strip()
+    year = str(data.get("year") or "").strip()
     engine = str(data.get("engine") or "").strip() or None
     start = str(data.get("start") or "").strip()
     end = str(data.get("end") or "").strip()
@@ -1091,7 +1125,10 @@ def api_bridge_run(bridge_id):
         period = {"start": start, "end": end,
                   "label": _label_from_range(start, end)}
     else:
-        period = _period_from_mode(mode, date)
+        try:
+            period = _period_from_mode(mode, date, quarter, year)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
         start, end = period["start"], period["end"]
 
     with _run_lock:
@@ -1131,7 +1168,11 @@ def api_bridge_run(bridge_id):
 
             cmd = [sys.executable, os.path.join(ROOT, "run_agent.py"),
                    "--config", cfg_path, "--mode", mode]
-            if date:
+            if mode == "quarterly" and quarter:
+                cmd += ["--quarter", quarter]
+                if year:
+                    cmd += ["--year", year]
+            elif date:
                 cmd += ["--date", date]
             if engine:
                 cmd += ["--engine", engine]
@@ -1435,47 +1476,11 @@ def api_preprocess_status():
     })
 
 
-@app.route("/api/hub/bridges")
-def api_hub_bridges():
-    auth = _require_token()
-    if auth:
-        return auth
-    if WEB_MODE != "hub":
-        return jsonify({"error": "当前不是 hub 模式（设置 REPORT_WEB_MODE=hub）"}), 400
-    import requests
-    out = []
-    for b in list_bridges(REGISTRY):
-        host = b.get("host", "")
-        port = b.get("port", 8080)
-        token = os.environ.get(b.get("token_env", ""), "") or WEB_TOKEN
-        if not host:
-            out.append({
-                "id": b.get("id"),
-                "name": b.get("name"),
-                "url": "",
-                "reachable": False,
-                "error": "注册表中未配置 host",
-            })
-            continue
-        url = f"http://{host}:{port}/api/status"
-        item = {"id": b.get("id"), "name": b.get("name"), "url": url, "reachable": False}
-        try:
-            headers = {"X-Auth-Token": token} if token else {}
-            r = requests.get(url, headers=headers, timeout=5)
-            item["reachable"] = r.status_code == 200
-            if r.ok:
-                item["remote"] = r.json()
-        except Exception as exc:  # noqa: BLE001
-            item["error"] = str(exc)
-        out.append(item)
-    return jsonify({"bridges": out})
-
-
 def main():
     host = os.environ.get("REPORT_WEB_HOST", "127.0.0.1")
-    port = int(os.environ.get("REPORT_WEB_PORT", "8080"))
-    log.info("报告智能体 Web 管理台启动: http://%s:%s  mode=%s  auth=%s",
-             host, port, WEB_MODE, "on" if WEB_TOKEN else "off")
+    port = int(os.environ.get("REPORT_WEB_PORT", "8456"))
+    log.info("报告智能体 Web 管理台启动: http://%s:%s  auth=%s",
+             host, port, "on" if WEB_TOKEN else "off")
     app.run(host=host, port=port, threaded=True)
 
 

@@ -1,14 +1,18 @@
 # -*- coding: utf-8 -*-
-"""定时调度：每周或每月自动生成报告。
+"""定时调度：每周/每月/每季度/每年自动生成报告。
 
 使用 APScheduler 的 CronTrigger 实现精确调度，不再轮询。
 APScheduler 未安装时自动降级为原轮询模式（每 30s 检查一次）。
 
 配置项（config.json → schedule）：
-  mode: weekly | monthly
+  mode: weekly | monthly | quarterly | yearly
   weekday: 1-7（1=周一...7=周日），weekly 模式用
-  day_of_month: 1-31，monthly 模式用
+  day_of_month: 1-31，monthly/quarterly/yearly 模式用
   hour / minute: 触发时刻
+  start_date: YYYY-MM-DD，调度起始日期（仅 quarterly 生效）：
+    - 调度器启动时会先补跑“从 start_date 到今天的已结束季度”；
+    - 之后每到季度过完（次季首月 day_of_month 日）再生成上一季度。
+    例：start_date=2026-01-01，8 月启动 → 先补跑 Q1、Q2，再等 Q3 过完。
 
 也支持手动通过 run_agent.py --mode weekly 单次执行。
 """
@@ -21,6 +25,7 @@ import subprocess
 import sys
 import time
 
+from .period_utils import last_completed_quarter, quarter_range
 from .config import load_config
 
 log = logging.getLogger("report-agent.scheduler")
@@ -50,6 +55,23 @@ def next_run_time(now: dt.datetime, schedule: dict) -> dt.datetime:
                 year=year, month=month, day=min(day, last),
                 hour=hour, minute=minute, second=0, microsecond=0,
             )
+        return candidate
+
+    if mode == "quarterly":
+        # 每季度首月（1/4/7/10）的 day_of_month 日触发，生成刚结束的上一季度
+        day = int(schedule.get("day_of_month", 1))
+        for month in (1, 4, 7, 10):
+            last = calendar.monthrange(now.year, month)[1]
+            candidate = now.replace(
+                year=now.year, month=month, day=min(day, last),
+                hour=hour, minute=minute, second=0, microsecond=0,
+            )
+            if candidate > now:
+                return candidate
+        candidate = now.replace(
+            year=now.year + 1, month=1, day=min(day, 31),
+            hour=hour, minute=minute, second=0, microsecond=0,
+        )
         return candidate
 
     if mode == "yearly":
@@ -90,22 +112,21 @@ def _setup_logging(output_dir: str) -> None:
     )
 
 
-def _run_report_generation(cwd: str, mode: str) -> None:
+def _run_report_generation(cwd: str, mode: str,
+                           year: int = None, quarter: int = None) -> None:
     """调用 run_agent.py 生成报告。"""
     log.info("触发报告生成（模式=%s）", mode)
     cmd = [sys.executable, "run_agent.py", "--mode", mode]
     if mode == "quarterly":
-        # 季度首月(1/4/7/10月)触发时，报告上一个完整季度：
-        # 4/1 跑 1~3 月、7/1 跑 4~6 月、10/1 跑 7~9 月、1/1 跑去年 10~12 月
-        today = dt.date.today()
-        q = (today.month - 1) // 3          # 当前季度 0 基
-        first = dt.date(today.year, q * 3 + 1, 1)
-        end = first - dt.timedelta(days=1)  # 上一季度最后一天
-        cmd += ["--date", end.isoformat()]
-        log.info("季度报告期截止: %s（覆盖 %s ~ %s）",
-                 end.isoformat(),
-                 dt.date(end.year, ((end.month - 1) // 3) * 3 + 1, 1).isoformat(),
-                 end.isoformat())
+        if quarter is None:
+            # 季度过完（次季首月触发）时，报告刚结束的上一季度：
+            # 4/1 跑 1~3 月、7/1 跑 4~6 月、10/1 跑 7~9 月、1/1 跑去年 10~12 月
+            year, quarter = last_completed_quarter()
+        start, end = quarter_range(year, quarter)
+        cmd += ["--year", str(year), "--quarter", str(quarter)]
+        log.info("季度报告期: %s（覆盖 %s ~ %s）",
+                 f"{year}.{start.month}~{end.month}",
+                 start.isoformat(), end.isoformat())
     elif mode == "yearly":
         # 年度任务在次年 1 月触发时，报告上一年全年
         end = dt.date(dt.date.today().year - 1, 12, 31)
@@ -119,6 +140,55 @@ def _run_report_generation(cwd: str, mode: str) -> None:
             log.info("报告生成完成")
     except Exception as exc:  # noqa: BLE001
         log.exception("报告生成异常: %s", exc)
+
+
+def _pending_quarters(start_date: dt.date, today: dt.date = None) -> list:
+    """返回从 start_date 到今天之间“已完整结束且完全落在 start_date 之后”的季度。
+
+    例如 start_date=2026-01-01、today=2026-08-19 -> [(2026,1),(2026,2)]；
+    start_date 为今天（2026-08-19，Q3 未结束）-> []。
+    """
+    today = today or dt.date.today()
+    if today < start_date:
+        return []
+    ly, lq = last_completed_quarter(today)
+    out = []
+    y, q = start_date.year, (start_date.month - 1) // 3 + 1
+    while (y, q) <= (ly, lq):
+        s, _e = quarter_range(y, q)
+        if s >= start_date:
+            out.append((y, q))
+        q += 1
+        if q > 4:
+            q = 1
+            y += 1
+    return out
+
+
+def _catch_up_quarters(cwd: str, cfg: dict) -> None:
+    """调度器启动时补跑：从 schedule.start_date 到今天的已结束季度。"""
+    schedule = cfg.get("schedule", {})
+    if schedule.get("mode") != "quarterly":
+        return
+    start_str = str(schedule.get("start_date") or "").strip()
+    if not start_str:
+        log.info("未配置 schedule.start_date，调度从今天开始（当前季度过完才生成）")
+        return
+    try:
+        start_date = dt.date.fromisoformat(start_str)
+    except ValueError:
+        log.warning("schedule.start_date 无效: %r，忽略补跑", start_str)
+        return
+    pending = _pending_quarters(start_date)
+    if not pending:
+        log.info("起始日期 %s 之后没有需要补跑的已结束季度", start_date.isoformat())
+        return
+    log.info("起始日期 %s：补跑 %d 个已结束季度：%s",
+             start_date.isoformat(), len(pending),
+             "、".join(f"{y}Q{q}" for y, q in pending))
+    for y, q in pending:
+        log.info("== 补跑 %d 年第 %d 季度 ==", y, q)
+        _run_report_generation(cwd, "quarterly", year=y, quarter=q)
 
 
 def run_with_apscheduler(cfg: dict) -> None:
@@ -176,6 +246,9 @@ def run_with_apscheduler(cfg: dict) -> None:
         coalesce=True,  # 多次错过只执行一次
     )
 
+    # 先补跑 start_date 之后已结束的季度，再进入周期调度
+    _catch_up_quarters(cwd, cfg)
+
     # 下次执行时间
     next_time = next_run_time(dt.datetime.now(), schedule)
     log.info("下次执行时间: %s", next_time)
@@ -193,6 +266,7 @@ def run_with_polling(cfg: dict) -> None:
     cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     log.info("轮询模式启动：模式=%s，下次执行=%s", mode, next_run_time(dt.datetime.now(), schedule))
+    _catch_up_quarters(cwd, cfg)
     while True:
         now = dt.datetime.now()
         target = next_run_time(now, schedule)

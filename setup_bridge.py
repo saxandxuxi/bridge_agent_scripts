@@ -236,7 +236,7 @@ def register_bridge(bid: str, bridge_name: str, config_path: str) -> None:
     else:
         bridges.append({"id": bid, "name": bridge_name,
                         "config": os.path.relpath(config_path, BASE).replace("\\", "/"),
-                        "host": "", "port": 8080})
+                        "host": "", "port": 8456})
     with open(reg_path, "w", encoding="utf-8") as f:
         json.dump(reg, f, ensure_ascii=False, indent=2)
 

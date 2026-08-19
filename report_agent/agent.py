@@ -15,6 +15,8 @@ from .bridge_source import _norm
 
 log = logging.getLogger("report-agent.agent")
 
+from .period_utils import last_completed_quarter, quarter_range  # noqa: E402
+
 
 def resolve_period(
     mode: str,

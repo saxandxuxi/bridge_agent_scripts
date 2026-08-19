@@ -1,21 +1,21 @@
 # 数据分析报告智能体
 
-一个“喂模板、吐报告”的自动化智能体：给它一份 Word 报告模板，它会自动识别模板里需要替换的数据（正文数字、统计表格、图表），从数据文件中计算统计量（最大值、最小值、平均值等），调用 MATLAB 程序生成折线图/直方图/柱状图/箱线图，最后把数据、图表填回模板，输出一份完整的 Word 报告。可以部署到服务器上，按周或按月定时自动出报告。
+一个“喂模板、吐报告”的自动化智能体：给它一份 Word 报告模板，它会自动识别模板里需要替换的数据（正文数字、统计表格、图表），从数据文件中计算统计量（最大值、最小值、平均值等），调用 Python（matplotlib）生成折线图/直方图/柱状图/箱线图，最后把数据、图表填回模板，输出一份完整的 Word 报告。可以部署到 Windows 服务器上，按季度/年度/月/周定时自动出报告。
 
 ## 新增能力（2026-08）
 
 - **真实监测数据接入**：`report_agent/bridge_source.py` 直接读取“桥数据预处理”产出的 `统计值/*.json` 与 `图库/*.png`，无需 CSV 虚拟数据；测点名称自动匹配传感器编号，支持别名、模糊匹配、异常传感器排除。
-- **Web 管理台**：`web/app.py`（Flask）提供六桥总览、一键生成、报告下载、数据覆盖度、待补图表清单、日志查看；支持 `bridge`（单机）与 `hub`（中心汇总）两种模式。
-- **多桥注册表**：`bridges/registry.json` 管理六座桥及其服务器；`run_agent.py --bridge <id>` / `serve_scheduler.py --bridge <id>` 一键切换。
-- **部署文档**：`DEPLOY.md` 给出中心服务器 + 各桥服务器的完整部署、HTTPS、令牌鉴权与备份方案。
+- **Web 管理台**：`web/app.py`（Flask）提供本桥总览、一键生成、报告下载、数据覆盖度、待补图表清单、日志查看。**没有中心服务器**：每座桥独立部署在自己服务器的 Windows 上，原始数据不出本机。
+- **多桥注册表**：`bridges/registry.json` 管理各桥（`run_agent.py --bridge <id>` / `serve_scheduler.py --bridge <id>` 一键切换）。
+- **部署文档**：`DEPLOY.md` 给出 Windows 独立服务器部署、防火墙/远程访问、调度器说明与令牌鉴权。
 
 ```
 ┌────────────┐   ┌──────────────┐   ┌───────────────┐   ┌──────────────┐   ┌──────────────┐
-│ 数据文件    │ → │ 数据加载/过滤 │ → │ 统计计算      │ → │ MATLAB/出图  │ → │ 填充 Word 模板│
-│ (CSV)      │   │ (按周/月区间) │   │ (最大/最小/均值)│   │ (折线/直方图) │   │ (文本/表格/图)│
+│ 数据文件    │ → │ 数据加载/过滤 │ → │ 统计计算      │ → │ Python 出图   │ → │ 填充 Word 模板│
+│ (CSV)      │   │ (按季/年/月/周)│   │ (最大/最小/均值)│   │ (折线/直方图) │   │ (文本/表格/图)│
 └────────────┘   └──────────────┘   └───────────────┘   └──────────────┘   └──────────────┘
                                                               ↑
-                                       定时调度（每周/每月，系统计划任务 / Docker / systemd）
+                                       定时调度（季度/年度/月/周，Windows 计划任务自启）
 ```
 
 ## 目录结构
@@ -27,7 +27,7 @@ data_analysis/
 ├── serve_scheduler.py            # 常驻定时调度服务（每周/每月自动出报告）
 ├── bridges/registry.json         # 六座桥注册表（服务器/配置/令牌环境变量）
 ├── web/                          # Flask Web 管理台（后端 + 静态前端）
-├── DEPLOY.md                     # 多服务器部署文档
+├── DEPLOY.md                     # Windows 独立服务器部署文档
 ├── config/                       # 各桥智能体配置（config.json / config_<桥>.json）
 ├── requirements.txt              # Python 依赖
 ├── report_agent/                 # 核心代码
@@ -38,7 +38,7 @@ data_analysis/
 │   ├── stats.py                  # 统计计算
 │   ├── template_analyzer.py      # 模板识别（找出需要更换的数据）
 │   ├── recognizer.py             # 成品报告解析：图片/数字 动态 vs 固定 分类
-│   ├── chart_generator.py        # MATLAB 出图（Python 兜底）
+│   ├── chart_generator.py        # Python 出图（matplotlib）
 │   ├── report_builder.py         # Word 填充（文本/表格/图表）
 │   └── scheduler.py              # 定时调度逻辑
 ├── scripts/
@@ -46,11 +46,9 @@ data_analysis/
 │   └── make_sample_data.py       # 生成示例数据
 │   ├── make_sample_bridge_report.py  # 生成“桥梁监测报告”DOCX 样例（识别测试用）
 │   └── make_sample_pdf.py        # 生成“桥梁监测报告”PDF 样例（识别测试用）
-├── matlab/generate_charts.m      # MATLAB 出图程序
 ├── templates/                    # 报告模板（.docx）
 ├── data/                         # 数据文件（CSV）
-├── outputs/                      # 生成的报告与图表
-└── deploy/                       # 服务器部署文件
+└── outputs/                      # 生成的报告与图表
 ```
 
 ## 快速开始（本机）
@@ -89,8 +87,11 @@ python run_agent.py --mode weekly
 把“桥数据预处理”的产物放好后，在 `config/config_chishi.json` 的 `bridge_data` 里配置路径并启用：
 
 ```bash
-python run_agent.py --bridge chishi --mode quarterly --date 2026-03-31
+python run_agent.py --bridge chishi --mode quarterly --year 2026 --quarter 1
 ```
+
+季度模式只填**季度号（1~4）+ 年份**，不需要填具体日期；季度还没过完会直接报错
+（例如现在第 3 季度中却填 `--quarter 3`）。
 
 桥模式下：
 
@@ -124,22 +125,15 @@ python run_agent.py --bridge chishi --mode quarterly --date 2026-03-31
 ```bash
 python -m pip install -r requirements.txt
 export REPORT_WEB_TOKEN=你的令牌            # Windows: $env:REPORT_WEB_TOKEN="..."
-python web/app.py                           # 默认 127.0.0.1:8080
+python web/app.py                           # 默认 127.0.0.1:8456
 ```
 
-打开 http://127.0.0.1:8080 即可看到六桥总览、生成报告（**季度/年度/月/周/手动**）、下载报告、数据覆盖度、待补清单、**配置管理（数据路径、模板上传）、调度器启停**与日志。
-远程访问与防火墙/安全组设置见 [deploy/web_usage.md](deploy/web_usage.md)。
+打开 http://127.0.0.1:8456 即可看到本桥总览、生成报告（**季度/年度/月/周/手动**）、下载报告、数据覆盖度、待补清单、**配置管理（数据路径、模板上传）、调度器启停**与日志。
+远程访问与防火墙/安全组设置见 [DEPLOY.md](DEPLOY.md)。
 
 图表统一使用 Python 出图（MATLAB 路径已移除）；调度周期支持季度（季度首月）、年度（1 月）、月度、周度。
-中心汇总模式（部署在 222.242.152.65）：
-
-```bash
-export REPORT_WEB_MODE=hub
-export REPORT_WEB_PORT=8081
-python web/app.py
-```
-
-完整的多服务器部署（六桥各一台服务器 + 中心）见 [DEPLOY.md](DEPLOY.md)。
+Windows 独立服务器部署见 [DEPLOY.md](DEPLOY.md) 和
+[docs/部署说明_Windows小白版.md](docs/部署说明_Windows小白版.md)。
 
 ## 数据处理管道（桥数据预处理已集成）
 
@@ -169,7 +163,7 @@ Web 管理台的“数据处理”页可配置四个路径并一键运行，实�
 |---|---|---|
 | 统计值 | `{{stats.temperature.max}}` | 替换为计算结果，如 `33.4` |
 | 日期 | `{{date.period_start}}` | 报告期开始/结束/生成时间 |
-| 图表 | `{{chart.trend}}`（独占一行） | 替换为一张 MATLAB 生成的图片 |
+| 图表 | `{{chart.trend}}`（独占一行） | 替换为一张 Python（matplotlib）生成的图片 |
 | 可重复行 | 表格某行写 `{{rows.daily_records}}` | 这一行会按数据逐行复制 |
 | 行内字段 | `{{col.temperature:0.1f}}` | 可重复行里每列的数据 |
 
@@ -222,36 +216,27 @@ python scripts/make_sample_pdf.py             # 生成 PDF 样例
 python analyze_report.py --input outputs/sample/桥梁监测报告样例.docx --annotate outputs/sample/桥梁监测报告模板草稿.docx
 ```
 
-## 图表：调用 MATLAB 程序生成
+## 图表：Python（matplotlib）出图
 
-出图逻辑在 `matlab/generate_charts.m`，Python 端会把数据写成一个 JSON，再调用：
+出图逻辑在 `report_agent/chart_generator.py`，全部使用 Python + matplotlib，
+无需 MATLAB。模板里的 `{{chart.*}}` 占位符在桥模式下优先取“桥数据预处理”
+图库里的真实图片，取不到时生成“待补充”占位图并记入待补清单。
+图表类型支持折线图、直方图、柱状图、箱线图等，中文字体用 Windows 自带的
+微软雅黑。
 
-```bash
-matlab -batch "addpath('<项目>/matlab'); generate_charts('<项目>/outputs/charts/charts_input.json')"
-```
-
-MATLAB 读取 JSON 后生成对应类型图片（`trend.png` 折线图、`histogram.png` 直方图、`daily_bars.png` 柱状图、`boxplot.png` 箱线图），全部输出到 `outputs/charts/`。新增图表类型只需在 `generate_charts.m` 的 `switch` 里加一个分支，并在 `config.json` 的 `charts.definitions` 里登记。
-
-- `config.json → charts.engine`：`auto`（有 MATLAB 就用 MATLAB，否则 Python 兜底）/ `matlab` / `python`。
-- `charts.matlab.enabled`：为 `false` 时跳过 MATLAB 检测。
-- 如果服务器没有 MATLAB 许可，`python_fallback: true` 会自动改用 matplotlib 出图，效果接近。
-
-> 提示：MATLAB 中文标题需要在系统里安装中文字体（如微软雅黑），`generate_charts.m` 已尝试设置该字体。
-
-## 定时输出：隔一周 or 隔一个月
-
-两种方式任选：
+## 定时输出：季度/年度/月/周
 
 ### 方式一：常驻调度服务（推荐服务器）
 
-修改 `config.json` 的 `schedule` 字段：
+修改 `config/config_<桥>.json` 的 `schedule` 字段：
 
 ```json
 {
   "schedule": {
-    "mode": "weekly",        // weekly=周报 / monthly=月报
-    "weekday": 1,            // 每周几（1=周一 ... 7=周日）
-    "day_of_month": 1,       // 每月几号（monthly 时生效）
+    "mode": "quarterly",     // weekly / monthly / quarterly / yearly
+    "start_date": "2026-01-01",  // 季度模式起始日期（启动时先补跑已结束季度）
+    "weekday": 1,            // weekly 模式：每周几（1=周一 ... 7=周日）
+    "day_of_month": 1,       // monthly/quarterly/yearly：几号触发
     "hour": 8,
     "minute": 0
   }
@@ -261,40 +246,24 @@ MATLAB 读取 JSON 后生成对应类型图片（`trend.png` 折线图、`histog
 然后运行：
 
 ```bash
-python serve_scheduler.py
+python serve_scheduler.py --bridge chishi
 ```
 
 服务会常驻，到点自动执行 `run_agent.py`，日志写入 `outputs/scheduler.log`。
+季度模式**只在季度过完后的次季首月触发**，生成刚结束的上一季度；
+`start_date` 填了之后，调度器启动时会先把“从该日期到今天的已结束季度”补跑一遍。
 
 ### 方式二：交给系统计划任务
 
-- Windows：运行 `deploy/install_windows_task.ps1`（注册每周一 08:00 的周报任务，月报取消注释即可），或用“任务计划程序”添加。
-- Linux：用 cron，例如每周一 08:00 生成周报：
-
-```cron
-0 8 * * 1 cd /opt/report-agent && .venv/bin/python run_agent.py --mode weekly
-```
+- Windows：运行 `install_auto_start.bat <bridge_id>`（以管理员身份），
+  注册开机自启；或用“任务计划程序”添加，任务命令填
+  `python run_agent.py --bridge <bridge_id> --mode quarterly --year 2026 --quarter 1`。
 
 ## 服务器部署
 
-### Docker（推荐）
-
-```bash
-cd data_analysis
-docker compose -f deploy/docker-compose.yml up -d --build
-```
-
-容器按 `config.json` 中的调度配置定时生成报告，输出写入挂载的 `outputs/` 目录。镜像里自带中文字体，使用 Python 兜底出图；如需 MATLAB，自行在镜像中安装 MATLAB Runtime 或挂载 MATLAB 并设置 `charts.matlab.enabled: true`。
-
-### systemd（Linux 裸机）
-
-```bash
-sudo cp deploy/systemd/report-agent.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now report-agent
-```
-
-注意把 service 文件里的 `WorkingDirectory`、`ExecStart` 和用户改成实际路径。
+服务器均为 Windows，独立部署（每座桥一台服务器，无中心节点）。
+照着 [docs/部署说明_Windows小白版.md](docs/部署说明_Windows小白版.md) 复制代码、
+建环境、改配置、双击启动即可；完整说明见 [DEPLOY.md](DEPLOY.md)。
 
 ## 数据格式
 
@@ -310,8 +279,7 @@ date,temperature,humidity
 
 ## 常见问题
 
-- **图表中文乱码**：本机安装中文字体（Windows 自带微软雅黑；Linux 装 `fonts-wqy-zenhei`），matplotlib 已自动选择。
-- **找不到 MATLAB**：确认 `matlab` 在 PATH 中；或把 `charts.engine` 设为 `python`。
+- **图表中文乱码**：Windows 自带微软雅黑，matplotlib 已自动选择；个别精简版系统需补装中文字体。
 - **数据区间为空**：检查 `data/` 文件路径和日期范围（`--date` 指定的结束日之后没有数据）。
 - **生成后还有 `{{...}}` 残留**：说明模板里写了不存在的统计键，程序会报错并列出具体占位符；修正模板或 `config.json` 即可。
 - **想要新的统计量**：在 `report_agent/stats.py` 的 `compute_stats` 里增加字段，模板中直接用 `{{stats.<列>.<新字段>}}`。

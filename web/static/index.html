@@ -102,6 +102,14 @@
           <option value="weekly">周报</option>
           <option value="manual">手动区间</option>
         </select>
+        <select id="runQuarter" title="季度号 1~4（季度过完才能生成）">
+          <option value="1">第1季度</option>
+          <option value="2">第2季度</option>
+          <option value="3">第3季度</option>
+          <option value="4">第4季度</option>
+        </select>
+        <input type="number" id="runYear" min="2020" max="2100" step="1"
+               title="年份（默认今年）" style="width:90px">
         <input type="date" id="runEnd" title="报告期结束日（留空=今天）">
         <input type="date" id="runStart" title="手动区间开始日（仅手动区间用）" style="display:none">
         <button onclick="startRun()">开始生成</button>
@@ -245,7 +253,7 @@
       <h3 style="font-size:14px">调度设置</h3>
       <div class="field"><label>周期</label>
         <select id="schMode">
-          <option value="quarterly">每季度（季度首月）</option>
+          <option value="quarterly">每季度（季度过完）</option>
           <option value="yearly">每年（1月）</option>
           <option value="monthly">每月</option>
           <option value="weekly">每周</option>
@@ -253,6 +261,8 @@
       </div>
       <div class="field"><label>触发日期</label><input id="schDay" type="number" min="1" max="31" value="1"></div>
       <div class="field"><label>触发时间</label><input id="schHour" type="number" min="0" max="23" value="8"> 时 <input id="schMinute" type="number" min="0" max="59" value="0"> 分</div>
+      <div class="field"><label>起始日期</label><input id="schStart" type="date"
+        title="调度从这天开始：启动时会先补跑“从这天到今天的已结束季度”，再按周期等待下一个季度过完"></div>
       <div class="row">
         <button onclick="saveSchedule()">保存调度设置</button>
         <button class="ghost" onclick="startScheduler()">启动调度器</button>
@@ -404,7 +414,11 @@ function openBridge(id) { showTab("run"); $("runBridge").value = id; }
 function quickRun(id) { showTab("run"); $("runBridge").value = id; startRun(); }
 
 function onModeChange() {
-  var manual = $("runMode").value === "manual";
+  var mode = $("runMode").value;
+  var quarterly = mode === "quarterly";
+  var manual = mode === "manual";
+  $("runQuarter").style.display = quarterly ? "" : "none";
+  $("runYear").style.display = quarterly ? "" : "none";
   $("runStart").style.display = manual ? "" : "none";
   checkPeriod();
 }
@@ -420,7 +434,10 @@ function checkPeriod() {
   if (!bridgeId) return;
   var mode = $("runMode").value;
   var url = "/api/bridges/" + bridgeId + "/period?mode=" + encodeURIComponent(mode);
-  if (mode === "manual" && $("runStart").value && $("runEnd").value) {
+  if (mode === "quarterly") {
+    url += "&quarter=" + encodeURIComponent($("runQuarter").value || "1") +
+           "&year=" + encodeURIComponent($("runYear").value || String(new Date().getFullYear()));
+  } else if (mode === "manual" && $("runStart").value && $("runEnd").value) {
     url += "&start=" + $("runStart").value + "&end=" + $("runEnd").value;
   } else if ($("runEnd").value) {
     url += "&date=" + $("runEnd").value;
@@ -432,7 +449,9 @@ function checkPeriod() {
       "统计值: " + esc(p.stats_dir) + "　" + (p.stats_exists ? "✔ 已存在" : "✘ 缺失") + "<br>" +
       (p.data_ready ? '<span class="green">数据就绪，将跳过预处理直接生成报告</span>'
                     : '<span class="yellow">该周期图库/统计值缺失，勾选“自动预处理”会先跑数据处理</span>');
-  }).catch(function () {});
+  }).catch(function (e) {
+    $("periodInfo").innerHTML = '<span class="err">' + esc(String(e)) + "</span>";
+  });
 }
 
 function startRun() {
@@ -442,6 +461,10 @@ function startRun() {
     date: $("runEnd").value || "",
     template: $("runTemplate").value || ""
   };
+  if (body.mode === "quarterly") {
+    body.quarter = $("runQuarter").value || "1";
+    body.year = $("runYear").value || String(new Date().getFullYear());
+  }
   if (body.mode === "manual") body.start = $("runStart").value || "";
   body.auto_preprocess = $("runAutoPre").checked;
   $("runResult").innerHTML = "";
@@ -894,6 +917,7 @@ function loadScheduler() {
     $("schDay").value = s.schedule.day_of_month || 1;
     $("schHour").value = s.schedule.hour || 8;
     $("schMinute").value = s.schedule.minute || 0;
+    $("schStart").value = s.schedule.start_date || "";
   }).catch(function (e) { showMsg(String(e), "err"); });
 }
 
@@ -905,7 +929,8 @@ function saveSchedule() {
       mode: $("schMode").value,
       day_of_month: parseInt($("schDay").value, 10) || 1,
       hour: parseInt($("schHour").value, 10) || 8,
-      minute: parseInt($("schMinute").value, 10) || 0
+      minute: parseInt($("schMinute").value, 10) || 0,
+      start_date: $("schStart").value || ""
     }
   };
   api("/api/bridges/" + bridgeId + "/config", { method: "POST", body: JSON.stringify(body) })
@@ -938,7 +963,7 @@ function loadLog() {
 }
 
 api("/api/status").then(function (st) {
-  $("modeBadge").textContent = st.mode === "hub" ? "中心汇总模式" : "单机模式";
+  $("modeBadge").textContent = "独立桥服务器模式";
   $("authBadge").textContent = st.auth_required ? "已启用令牌鉴权" : "未鉴权（本机）";
   $("tokenInput").value = token();
   loadBridges();

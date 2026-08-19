@@ -1,11 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""常驻调度服务：按 config/config.json 中的 schedule 配置，每周/每月自动生成报告。
+"""常驻调度服务：按 config/config_<桥>.json 中的 schedule 配置自动生成报告。
 
 用法：
   python serve_scheduler.py
-  python serve_scheduler.py --config /path/to/config/config.json
+  python serve_scheduler.py --config /path/to/config/config_chishi.json
   python serve_scheduler.py --bridge chishi
+
+季度模式：季度过完（次季首月触发）才生成上一季度；配置 schedule.start_date
+后，启动时会先补跑“从 start_date 到今天已结束的季度”。
 """
 
 import argparse

@@ -1,6 +1,6 @@
 {
   "template": "templates/湘江特大桥_template_v17.docx",
-  "output_dir": "D:\\Code\\data_analysis\\outputs\\reports",
+  "output_dir": "outputs/reports",
   "bridge_data": {
     "enabled": true,
     "bridge_name": "湘江特大桥",

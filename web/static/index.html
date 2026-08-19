@@ -422,12 +422,24 @@ function onModeChange() {
   $("runStart").style.display = manual ? "" : "none";
   checkPeriod();
 }
+function defaultQuarter() {
+  // 默认取最近一个已完整结束的季度（如 8 月默认第 2 季度、1 月默认去年第 4 季度）
+  var now = new Date();
+  var y = now.getFullYear();
+  var cur = Math.floor(now.getMonth() / 3);   // 0 基当前季度
+  var q = cur === 0 ? 4 : cur;                 // 已结束的季度号
+  if (cur === 0) y -= 1;
+  return { quarter: String(q), year: String(y) };
+}
 $("runMode").addEventListener("change", onModeChange);
 $("runEnd").addEventListener("change", checkPeriod);
 $("runBridge").addEventListener("change", function () {
   loadRunTemplates();
   checkPeriod();
 });
+var _dq = defaultQuarter();
+$("runQuarter").value = _dq.quarter;
+$("runYear").value = _dq.year;
 onModeChange();
 
 function checkPeriod() {
@@ -499,6 +511,10 @@ function pollRun(bridgeId) {
           }, null, 2)) + "</pre>";
         } else {
           $("runStatus").textContent = "完成";
+          if (st.running && st.running.period_mismatch) {
+            $("runStatus").textContent = "完成（⚠ 报告期不一致）";
+            showMsg(st.running.period_mismatch, "err");
+          }
         }
         if (st.last_run && !(st.running && st.running.error)) {
           var s = {

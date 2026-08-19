@@ -233,6 +233,21 @@ def _repair_filename(name: str) -> str:
     return name
 
 
+def _portable_path(path: str) -> str:
+    """保存路径时尽量用相对项目根目录的写法；项目外的绝对路径（原始数据、
+    外部预处理产物等）保持绝对路径不变。统一用 / 分隔。"""
+    path = os.path.normpath(str(path or ""))
+    if not path:
+        return ""
+    try:
+        rel = os.path.relpath(path, ROOT)
+        if rel != ".." and not rel.startswith(".." + os.sep):
+            return rel.replace("\\", "/")
+    except ValueError:
+        pass
+    return path.replace("\\", "/")
+
+
 def _mask_secrets(cfg: Dict) -> Dict:
     out = dict(cfg)
     llm = out.get("llm")
@@ -384,7 +399,7 @@ def api_bridge_config_update(bridge_id):
     if isinstance(data.get("paths"), dict):
         for k in ("stats_dir", "charts_dir", "sensor_map", "name_dict", "overview"):
             if k in data["paths"] and data["paths"][k] is not None:
-                bd[k] = str(data["paths"][k]).strip()
+                bd[k] = _portable_path(str(data["paths"][k]))
     for k in ("sensor_exclude", "auto_fill_missing_charts", "fuzzy_threshold", "period_aggregate"):
         if k in data:
             bd[k] = data[k]
@@ -1034,7 +1049,11 @@ def _run_pipeline(period: Dict, charts_dir: str, stats_dir: str,
 
 def _update_bridge_data_dirs(bridge_id: str, stats_dir: str,
                              charts_dir: str) -> None:
-    """把桥配置的 bridge_data 路径切到季度目录。"""
+    """把桥配置的 bridge_data 路径切到季度目录。
+
+    项目内的路径一律保存为相对项目根目录的写法（便于换机器部署），
+    项目外（原始数据/外部预处理产物）保持绝对路径。
+    """
     cfg_path = _config_path_for(bridge_id)
     if not cfg_path:
         return
@@ -1044,12 +1063,13 @@ def _update_bridge_data_dirs(bridge_id: str, stats_dir: str,
     except Exception:  # noqa: BLE001
         return
     bd = cfg.setdefault("bridge_data", {})
-    bd["stats_dir"] = stats_dir
-    bd["charts_dir"] = charts_dir
+    bd["stats_dir"] = _portable_path(stats_dir)
+    bd["charts_dir"] = _portable_path(charts_dir)
     # 传感器对照表是固定产物，统一放 preprocess/传感器对照/，不随季度变化
     map_dir = os.path.join(PREPROCESS_DIR, "传感器对照")
-    bd["sensor_map"] = os.path.join(map_dir, "传感器编号名称.json")
-    bd["overview"] = os.path.join(stats_dir, "总览.json")
+    bd["sensor_map"] = _portable_path(
+        os.path.join(map_dir, "传感器编号名称.json"))
+    bd["overview"] = _portable_path(os.path.join(stats_dir, "总览.json"))
     bridge = bd.get("bridge_name", "") or ""
     from report_agent.config import name_dict_candidates
     nd_dir = os.path.join(map_dir, "传感器名称对照")
@@ -1057,12 +1077,33 @@ def _update_bridge_data_dirs(bridge_id: str, stats_dir: str,
     for fn in name_dict_candidates(bridge):
         cand = os.path.join(nd_dir, fn)
         if os.path.isfile(cand):
-            bd["name_dict"] = cand
+            bd["name_dict"] = _portable_path(cand)
             break
     if not bd["name_dict"]:
-        bd["name_dict"] = os.path.join(nd_dir,
-                                       f"{bridge}大桥.json")
+        bd["name_dict"] = _portable_path(
+            os.path.join(nd_dir, f"{bridge}大桥.json"))
     _save_config(cfg, cfg_path)
+
+
+def _check_period_match(bridge_id: str, period: Dict, st: Dict) -> None:
+    """报告生成后核对 last_run.json 的实际报告期，防止“请求 4~6、生成 1~3”。"""
+    cfg = _config_for(bridge_id)
+    if not cfg or "error" in cfg:
+        return
+    lr_path = os.path.join(cfg.get("output_dir", ""), "last_run.json")
+    if not os.path.isfile(lr_path):
+        return
+    try:
+        with open(lr_path, "r", encoding="utf-8") as f:
+            lr = json.load(f)
+    except Exception:  # noqa: BLE001
+        return
+    lp = lr.get("period") or {}
+    if lp.get("label") and lp.get("label") != period.get("label"):
+        msg = (f"报告期不一致：请求 {period.get('label')}，实际生成 "
+               f"{lp.get('label')}（{lp.get('start')} ~ {lp.get('end')}）")
+        st["period_mismatch"] = msg
+        log.error("桥梁 %s %s", bridge_id, msg)
 
 
 @app.route("/api/bridges/<bridge_id>/period")
@@ -1168,10 +1209,10 @@ def api_bridge_run(bridge_id):
 
             cmd = [sys.executable, os.path.join(ROOT, "run_agent.py"),
                    "--config", cfg_path, "--mode", mode]
-            if mode == "quarterly" and quarter:
-                cmd += ["--quarter", quarter]
-                if year:
-                    cmd += ["--year", year]
+            if mode == "quarterly":
+                # 以 web 算好的报告期结束日为准传给 run_agent，避免两边
+                # 各自推导季度导致报告期不一致（如显示 4~6 却生成 1~3）
+                cmd += ["--date", period["end"]]
             elif date:
                 cmd += ["--date", date]
             if engine:
@@ -1192,6 +1233,8 @@ def api_bridge_run(bridge_id):
             st["log_tail"] = out.decode("utf-8", errors="replace")[-4000:]
             st["finished_at"] = dt.datetime.now().isoformat(timespec="seconds")
             log.info("桥梁 %s 报告生成完成，返回码 %s", bridge_id, proc.returncode)
+            if proc.returncode == 0:
+                _check_period_match(bridge_id, period, st)
         except Exception as exc:  # noqa: BLE001
             st["error"] = str(exc)
             st["finished_at"] = dt.datetime.now().isoformat(timespec="seconds")
@@ -1379,16 +1422,16 @@ def api_preprocess_config_save():
             bd["enabled"] = True
             bd["bridge_name"] = canon_name
             if assets.get("stats_dir"):
-                bd["stats_dir"] = assets["stats_dir"]
+                bd["stats_dir"] = _portable_path(assets["stats_dir"])
             if assets.get("charts_dir"):
-                bd["charts_dir"] = assets["charts_dir"]
+                bd["charts_dir"] = _portable_path(assets["charts_dir"])
             if assets.get("sensor_map"):
-                bd["sensor_map"] = assets["sensor_map"]
+                bd["sensor_map"] = _portable_path(assets["sensor_map"])
             if assets.get("name_dict"):
-                bd["name_dict"] = assets["name_dict"]
+                bd["name_dict"] = _portable_path(assets["name_dict"])
             if assets.get("stats_dir"):
-                bd["overview"] = os.path.join(
-                    assets["stats_dir"], "总览.json")
+                bd["overview"] = _portable_path(os.path.join(
+                    assets["stats_dir"], "总览.json"))
             _save_config(bcfg, bridge_cfg_path)
         except Exception as exc:  # noqa: BLE001
             return jsonify({"ok": True, "config": cfg,

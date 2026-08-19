@@ -93,7 +93,7 @@
     "with_timestamp": false
   },
   "data": {
-    "file": "D:\\Code\\data_analysis\\data\\temperature_daily.csv",
+    "file": "data/temperature_daily.csv",
     "date_column": "date",
     "value_columns": [
       "temperature",
@@ -192,7 +192,7 @@
   },
   "charts": {
     "engine": "python",
-    "output_dir": "D:\\Code\\data_analysis\\outputs\\charts",
+    "output_dir": "outputs/charts",
     "width_inches": 5.8,
     "definitions": [
       {

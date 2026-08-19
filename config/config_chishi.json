@@ -1,15 +1,15 @@
 {
   "template": "templates/赤石大桥_template_v29.docx",
   "output_dir": "outputs/reports",
-  "source_report": ".\\inputs\\赤石大桥.docx",
+  "source_report": "inputs/赤石大桥.docx",
   "bridge_data": {
     "enabled": true,
     "bridge_name": "赤石",
-    "stats_dir": "D:\\Code\\data_analysis\\preprocess\\统计值_2026.1~3\\赤石",
-    "charts_dir": "D:\\Code\\data_analysis\\preprocess\\图库_2026.1~3\\赤石",
-    "sensor_map": "D:\\Code\\data_analysis\\preprocess/传感器对照/传感器编号名称.json",
-    "overview": "D:\\Code\\data_analysis\\preprocess\\统计值_2026.1~3\\赤石\\总览.json",
-    "name_dict": "D:\\Code\\data_analysis\\preprocess/传感器对照/传感器名称对照\\赤石大桥.json",
+    "stats_dir": "preprocess/统计值_2026.1~3/赤石",
+    "charts_dir": "preprocess/图库_2026.1~3/赤石",
+    "sensor_map": "preprocess/传感器对照/传感器编号名称.json",
+    "overview": "preprocess/统计值_2026.1~3/赤石/总览.json",
+    "name_dict": "preprocess/传感器对照/传感器名称对照/赤石大桥.json",
     "fuzzy_threshold": 0.7,
     "period_aggregate": true,
     "auto_fill_missing_charts": true,
@@ -106,7 +106,7 @@
     "with_timestamp": false
   },
   "data": {
-    "file": "D:\\Code\\data_analysis\\data\\temperature_daily.csv",
+    "file": "data/temperature_daily.csv",
     "date_column": "date",
     "value_columns": [
       "temperature",
@@ -205,7 +205,7 @@
   },
   "charts": {
     "engine": "python",
-    "output_dir": "D:\\Code\\data_analysis\\outputs\\charts",
+    "output_dir": "outputs/charts",
     "width_inches": 5.8,
     "definitions": [
       {

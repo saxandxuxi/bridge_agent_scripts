@@ -12,6 +12,7 @@ APScheduler 未安装时自动降级为原轮询模式（每 30s 检查一次）
   start_date: YYYY-MM-DD，调度起始日期：
     - quarterly：启动时先补跑“从 start_date 到今天的已结束季度”，
       之后每到季度过完（次季首月 day_of_month 日）再生成上一季度；
+      同时每年 1 月还会自动生成上一年度报告；
     - yearly：每年 1 月 day_of_month 日触发，生成上一年全年；
       启动时若上一年度报告还不存在，也会补跑一份。
     例：start_date=2026-01-01，8 月启动 → 先补跑 Q1、Q2，再等 Q3 过完。
@@ -116,10 +117,15 @@ def _setup_logging(output_dir: str) -> None:
 
 
 def _run_report_generation(cwd: str, mode: str,
-                           year: int = None, quarter: int = None) -> None:
+                           year: int = None, quarter: int = None,
+                           config_path: str = None) -> None:
     """调用 run_agent.py 生成报告。"""
     log.info("触发报告生成（模式=%s）", mode)
     cmd = [sys.executable, "run_agent.py", "--mode", mode]
+    if config_path:
+        # 必须带 --config，否则 run_agent 会落到默认配置(config.json)，
+        # 导致调度器一直用错桥的数据源（如报 data/temperature_daily.csv 不存在）
+        cmd += ["--config", config_path]
     if mode == "quarterly":
         if quarter is None:
             # 季度过完（次季首月触发）时，报告刚结束的上一季度：
@@ -184,21 +190,20 @@ def _yearly_report_exists(output_dir: str, year_label: str) -> bool:
 
 
 def _catch_up_yearly(cwd: str, cfg: dict) -> None:
-    """年度模式启动补跑：上一完整年度还没有年度报告时生成一份。
+    """启动补跑：上一完整年度还没有年度报告时生成一份（季度/年度模式通用）。
 
-    例如 2026 年 8 月首次启动、start_date 不晚于 2025-01-01，
-    会自动补生成 2025 年年度报告（已存在则跳过，避免每次重启重跑）。
+    例如 start_date=2025-06-30、2026 年 8 月启动，会自动补生成
+    2025 年年度报告（已存在则跳过，避免每次重启重跑）。
     """
     schedule = cfg.get("schedule", {})
-    if schedule.get("mode") != "yearly":
-        return
     prev_year = last_completed_year()
-    # 起始日期保护：start_date 必须不晚于该年 1 月 1 日才补跑
+    # 起始日期保护：start_date 所在年份晚于上一年度才不补跑
+    # （start_date=2025-06-30 时，2025 年度仍然补跑）
     start_str = str(schedule.get("start_date") or "").strip()
     if start_str:
         try:
-            if dt.date.fromisoformat(start_str) > dt.date(prev_year, 1, 1):
-                log.info("起始日期 %s 晚于 %d-01-01，不补跑 %d 年年度报告",
+            if dt.date.fromisoformat(start_str).year > prev_year:
+                log.info("起始日期 %s 晚于 %d 年，不补跑 %d 年年度报告",
                          start_str, prev_year, prev_year)
                 return
         except ValueError:
@@ -209,14 +214,16 @@ def _catch_up_yearly(cwd: str, cfg: dict) -> None:
         log.info("已存在 %d 年年度报告，跳过补跑", prev_year)
         return
     log.info("== 补跑 %d 年年度报告 ==", prev_year)
-    _run_report_generation(cwd, "yearly", year=prev_year)
+    _run_report_generation(cwd, "yearly", year=prev_year,
+                           config_path=cfg.get("_config_path") or "")
 
 
 def _catch_up_pending(cwd: str, cfg: dict) -> None:
-    """调度器启动时补跑：季度模式补已结束季度，年度模式补上一年年度报告。"""
+    """调度器启动时补跑：季度模式补已结束季度；同时补上一年年度报告。"""
     schedule = cfg.get("schedule", {})
+    # 年度报告补跑对季度/年度模式都执行
+    _catch_up_yearly(cwd, cfg)
     if schedule.get("mode") != "quarterly":
-        _catch_up_yearly(cwd, cfg)
         return
     start_str = str(schedule.get("start_date") or "").strip()
     if not start_str:
@@ -236,7 +243,8 @@ def _catch_up_pending(cwd: str, cfg: dict) -> None:
              "、".join(f"{y}Q{q}" for y, q in pending))
     for y, q in pending:
         log.info("== 补跑 %d 年第 %d 季度 ==", y, q)
-        _run_report_generation(cwd, "quarterly", year=y, quarter=q)
+        _run_report_generation(cwd, "quarterly", year=y, quarter=q,
+                               config_path=cfg.get("_config_path") or "")
 
 
 def run_with_apscheduler(cfg: dict) -> None:
@@ -249,6 +257,7 @@ def run_with_apscheduler(cfg: dict) -> None:
     hour = int(schedule.get("hour", 8))
     minute = int(schedule.get("minute", 0))
     cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    config_path = cfg.get("_config_path", "")
 
     scheduler = BlockingScheduler()
 
@@ -288,11 +297,24 @@ def run_with_apscheduler(cfg: dict) -> None:
     scheduler.add_job(
         _run_report_generation,
         trigger=trigger,
-        args=[cwd, mode],
+        args=[cwd, mode, None, None, config_path],
         id="report_generation",
         misfire_grace_time=3600,  # 错过1小时内仍可补执行
         coalesce=True,  # 多次错过只执行一次
     )
+    if mode == "quarterly":
+        # 季度模式下，每年 1 月额外生成上一年度报告
+        day = int(schedule.get("day_of_month", 1))
+        scheduler.add_job(
+            _run_report_generation,
+            CronTrigger(month="1", day=day, hour=hour, minute=minute),
+            args=[cwd, "yearly", None, None, config_path],
+            id="yearly_report",
+            misfire_grace_time=3600,
+            coalesce=True,
+        )
+        log.info("已附加年度报告任务：每年 1 月 %d 日 %02d:%02d 生成上一年报告",
+                 day, hour, minute)
 
     # 先补跑 start_date 之后已结束的季度 / 上一年度报告，再进入周期调度
     _catch_up_pending(cwd, cfg)
@@ -323,7 +345,8 @@ def run_with_polling(cfg: dict) -> None:
             time.sleep(min(wait_seconds, 30))
             continue
 
-        _run_report_generation(cwd, mode)
+        _run_report_generation(cwd, mode,
+                               config_path=cfg.get("_config_path") or "")
         time.sleep(60)
 
 
@@ -334,6 +357,7 @@ def run_forever(config_path: str = None) -> None:
     APScheduler 未安装时降级为 30s 轮询模式。
     """
     cfg = load_config(config_path)
+    cfg.setdefault("_config_path", config_path or "")
     output_dir = cfg.get("output_dir", "outputs")
     _setup_logging(output_dir)
 

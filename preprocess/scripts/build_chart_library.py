@@ -2735,9 +2735,17 @@ def main():
             os.path.join(args.lib_root, f"统计值_{tag}") if tag
             else os.path.join(args.lib_root, "统计值"))
     if bridge:
-        # 图库/统计值(相对路径)：图库_<期>/<桥名>、统计值_<期>/<桥名>
-        chart_dir = os.path.join(chart_dir, bridge)
-        stats_dir = os.path.join(stats_dir, bridge)
+        # 图库/统计值：图库_<期>/<桥名>、统计值_<期>/<桥名>。
+        # 显式 --charts-dir/--stats-dir 可能已带桥名（web 传的是
+        # 图库_<期>/<桥名> 这种），已带时不再重复拼，避免出现
+        # 统计值_2026.4~6/洣水河特大桥/洣水河特大桥/位置统计
+        def _leaf_has_bridge(path):
+            leaf = os.path.basename(os.path.normpath(str(path or "")))
+            return bool(leaf) and leaf in _bridge_variants(bridge)
+        if not _leaf_has_bridge(chart_dir):
+            chart_dir = os.path.join(chart_dir, bridge)
+        if not _leaf_has_bridge(stats_dir):
+            stats_dir = os.path.join(stats_dir, bridge)
         print(f"大桥名称: {bridge}")
         print(f"daily 数据源: {args.daily_root}")
     if isinstance(args.daily_root, list) and len(args.daily_root) > 1:

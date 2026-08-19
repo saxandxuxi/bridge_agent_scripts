@@ -64,7 +64,7 @@ OUTPUT_ROOT = ""        # 留空 = 自动放在 DATA_ROOT 上一级的 results/ 
 BUCKET_SECONDS = 3600   # 聚合粒度(秒)，默认 3600 = 1 小时，一天输出 24 行
 WORKERS = 0             # 0 = 自动使用全部 CPU 核数
 MEDIAN_MODE = "none"    # none=不计算中位数(默认,图库/统计值不使用中位数列)
-RESUME = False          # True = 已生成过的 daily 日文件自动跳过(断点续跑)
+RESUME = True           # True = 已生成过的 daily 日文件自动跳过(断点续跑，默认开)
 SENSORS_PER_WORKER = 3  # 每个工作进程一次处理的传感器数量(按传感器分批)
 DAILY_SUBDIR = "daily"  # daily 输出子目录（带期号时为 daily_2026.1~3）
 # -----------------------------------------------------------
@@ -1137,7 +1137,9 @@ def main():
                     default=MEDIAN_MODE,
                     help="exact=精确中位数(默认); none=不计算中位数(最省内存)")
     ap.add_argument("--resume", action="store_true", default=RESUME,
-                    help="跳过已生成过的 daily 日文件(断点续跑)")
+                    help="跳过已生成过的 daily 日文件(断点续跑，默认开启)")
+    ap.add_argument("--no-resume", action="store_false", dest="resume",
+                    help="关闭断点续跑(重新处理全部)")
     ap.add_argument("--limit-days", type=int, default=0,
                     help="每个传感器每个特征只处理前 N 天(试跑用)")
     ap.add_argument("--period-tag", default="",

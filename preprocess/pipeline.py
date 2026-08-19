@@ -143,9 +143,11 @@ def main() -> int:
     ap.add_argument("--skip-per-sensor", action="store_true",
                     help="生成图库/统计值时跳过逐传感器图，只生成按监测部位"
                          "合并的图(传给 build_chart_library.py)")
-    ap.add_argument("--resume", action="store_true",
-                    help="预处理断点续跑：已生成的日级 CSV 自动跳过"
+    ap.add_argument("--resume", action="store_true", default=True,
+                    help="预处理断点续跑(默认开启)：已生成的日级 CSV 自动跳过"
                          "(传给 preprocess_sensor_data.py)")
+    ap.add_argument("--no-resume", action="store_false", dest="resume",
+                    help="关闭断点续跑(重新处理全部)")
     ap.add_argument("--period", choices=["quarterly", "yearly"],
                     default="quarterly",
                     help="统计周期(传给 build_quarterly_stats.py；"
@@ -197,6 +199,8 @@ def main() -> int:
             cmd1 += ["--bridge", args.bridge]
         if args.resume:
             cmd1 += ["--resume"]
+        else:
+            cmd1 += ["--no-resume"]
         tag = period_tag(start, end)
         if tag:
             cmd1 += ["--period-tag", tag]

@@ -1133,6 +1133,8 @@ def api_bridge_period(bridge_id):
     if not cfg or "error" in cfg:
         return jsonify({"error": "配置不可用"}), 404
     mode = request.args.get("mode", "quarterly")
+    if mode not in ("weekly", "monthly", "quarterly", "yearly", "manual"):
+        return jsonify({"error": f"无效模式: {mode}"}), 400
     date = request.args.get("date", "")
     quarter = request.args.get("quarter", "")
     year = request.args.get("year", "")
@@ -1233,8 +1235,9 @@ def api_bridge_run(bridge_id):
                 # 以 web 算好的报告期结束日为准传给 run_agent，避免两边
                 # 各自推导季度/年份导致报告期不一致（如选 2025 却生成 2026）
                 cmd += ["--date", period["end"]]
-            elif date:
-                cmd += ["--date", date]
+            elif date or (mode == "manual" and end):
+                # manual 区间：把结束日传给 run_agent（否则它会按今天推导）
+                cmd += ["--date", date or end]
             if engine:
                 cmd += ["--engine", engine]
             if template:

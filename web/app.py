@@ -203,6 +203,19 @@ def _dir_nonempty(path: str) -> bool:
     return False
 
 
+def _stats_ready(stats_dir: str) -> bool:
+    """统计值就绪 = 目录非空且存在“位置统计”子目录（含 json）。
+
+    防止错误的双层桥名目录（如 …/洣水河特大桥/洣水河特大桥/位置统计）
+    让单层目录看起来“已存在”，从而跳过真正的预处理（导致季度总结等
+    没生成、报告取不到数据）。
+    """
+    if not _dir_nonempty(stats_dir):
+        return False
+    pos_dir = os.path.join(stats_dir, "位置统计")
+    return os.path.isdir(pos_dir) and _dir_nonempty(pos_dir)
+
+
 # ---------------------------------------------------------------------------
 # 工具
 # ---------------------------------------------------------------------------
@@ -1154,8 +1167,8 @@ def api_bridge_period(bridge_id):
         "charts_dir": charts_dir,
         "stats_dir": stats_dir,
         "charts_exists": _dir_nonempty(charts_dir),
-        "stats_exists": _dir_nonempty(stats_dir),
-        "data_ready": _dir_nonempty(charts_dir) and _dir_nonempty(stats_dir),
+        "stats_exists": _stats_ready(stats_dir),
+        "data_ready": _dir_nonempty(charts_dir) and _stats_ready(stats_dir),
     })
 
 
@@ -1204,7 +1217,8 @@ def api_bridge_run(bridge_id):
             st["period"] = period
             cfg = _config_for(bridge_id)
             charts_dir, stats_dir = _quarter_dirs(cfg, period["label"])
-            data_ready = _dir_nonempty(charts_dir) and _dir_nonempty(stats_dir)
+            data_ready = (_dir_nonempty(charts_dir)
+                          and _stats_ready(stats_dir))
             st["charts_dir"] = charts_dir
             st["stats_dir"] = stats_dir
             st["data_ready"] = data_ready

@@ -936,20 +936,44 @@ def load_inventory(path):
 
 
 def _inventory_covers(inventory, start, end):
-    """判断摸底表日期范围是否覆盖请求时间段（start~end 留空表示不限）。"""
-    if not start and not end:
-        return True
+    """复用摸底表的严格判定：请求时间段必须完整落在表内。
+
+    规则（全部满足才允许复用，否则重新摸底）：
+      - 表不能为空；
+      - 请求的起止日期都必须真实出现在表中；
+      - 请求时间段内每一天在表中出现的覆盖率 >= 90%。
+    避免旧摸底表(如只含 2026)被复用到 2025，导致任务数为 0、
+    “管道全部完成”却一个文件都不生成。
+    """
+    if not inventory:
+        return False
     all_days = set()
     for feats in (inventory or {}).values():
         for st in feats.values():
             all_days.update(st.get("days") or ())
     if not all_days:
         return False
-    lo, hi = min(all_days), max(all_days)
-    if start and start < lo:
+    try:
+        s = dt.date.fromisoformat(start) if start else None
+        e = dt.date.fromisoformat(end) if end else None
+    except ValueError:
         return False
-    if end and end > hi:
+    if s and s.isoformat() not in all_days:
         return False
+    if e and e.isoformat() not in all_days:
+        return False
+    if s and e:
+        total = (e - s).days + 1
+        if total <= 0:
+            return False
+        present = 0
+        day = s
+        while day <= e:
+            if day.isoformat() in all_days:
+                present += 1
+            day += dt.timedelta(days=1)
+        if present / total < 0.9:
+            return False
     return True
 
 
@@ -1211,6 +1235,7 @@ def main():
         logger.info(f"摸底范围: 传感器 {scan_scope}")
         info = None
         inv_path = os.path.join(OUTPUT_ROOT, "inventory.csv")
+        reused_inventory = False
         if args.mode != "inventory":
             # 已有本桥摸底表则直接复用，跳过耗时扫描（--mode inventory 才会重扫）
             info = load_inventory(inv_path)
@@ -1220,6 +1245,8 @@ def main():
                                "重新摸底扫描", args.start or "最早",
                                args.end or "最新")
                 info = None
+            else:
+                reused_inventory = info is not None
         if info is None:
             logger.info("未找到可复用的摸底表，开始摸底扫描...")
             info = discover(sensors=sensors_arg, start=args.start, end=args.end)
@@ -1238,6 +1265,13 @@ def main():
     if args.mode in ("preprocess", "all") and not args.traffic_only:
         tasks = build_tasks(info, sensors_arg, args.features,
                             args.start, args.end, args.limit_days)
+        if not tasks and reused_inventory:
+            # 兜底：复用表可能仍不准确（如部分传感器缺日期），强制重新摸底一次
+            logger.warning("复用摸底表后任务数为 0，强制重新摸底扫描一次...")
+            info = discover(sensors=sensors_arg, start=args.start, end=args.end)
+            write_inventory(info)
+            tasks = build_tasks(info, sensors_arg, args.features,
+                                args.start, args.end, args.limit_days)
         if not tasks:
             logger.warning("没有符合条件的任务：请确认原始数据目录结构、摸底表"
                            "是否覆盖 %s ~ %s，以及 --bridge 桥名是否正确",

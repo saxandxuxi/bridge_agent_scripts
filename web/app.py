@@ -1223,9 +1223,11 @@ def api_bridge_run(bridge_id):
                         return
                 else:
                     st["preprocess"] = "skipped"
-                _update_bridge_data_dirs(bridge_id, stats_dir, charts_dir)
             else:
                 st["preprocess"] = "manual"
+            # 无论是否跑了预处理，都把配置切到本次报告期对应的图库/统计值目录，
+            # 避免数据就绪跳过预处理时配置仍指向上一期（如 1~3）导致图表匹配失败
+            _update_bridge_data_dirs(bridge_id, stats_dir, charts_dir)
 
             cmd = [sys.executable, os.path.join(ROOT, "run_agent.py"),
                    "--config", cfg_path, "--mode", mode]
@@ -1253,7 +1255,12 @@ def api_bridge_run(bridge_id):
             st["log_tail"] = out.decode("utf-8", errors="replace")[-4000:]
             st["finished_at"] = dt.datetime.now().isoformat(timespec="seconds")
             log.info("桥梁 %s 报告生成完成，返回码 %s", bridge_id, proc.returncode)
-            if proc.returncode == 0:
+            if proc.returncode != 0:
+                # 失败必须明确报出来，否则页面会显示“完成”和旧的 last_run，
+                # 让人误以为生成了别的报告期
+                st["error"] = (f"报告生成失败（返回码 {proc.returncode}），"
+                               f"详见下方日志尾部或 outputs/logs/agent.log")
+            else:
                 _check_period_match(bridge_id, period, st)
         except Exception as exc:  # noqa: BLE001
             st["error"] = str(exc)

@@ -337,6 +337,17 @@ class ReportAgent:
                 for cid in extra_ids:
                     info = bridge.resolve_chart_info(cid, cid)
                     if not info:
+                        # 匹配不到也生成占位图并记入待补清单，避免整个报告
+                        # 因个别图表占位符匹配失败而中断（报告仍可正常生成）
+                        reason = f"未匹配到图库图片（模板占位符: {cid}）"
+                        placeholder = bridge.make_placeholder_chart(
+                            cid, reason, out_dir)
+                        if placeholder:
+                            chart_images[cid] = placeholder
+                        chart_captions[cid] = cid
+                        pending_charts.append({
+                            "chart_id": cid, "caption": cid, "reason": reason,
+                        })
                         continue
                     chart_images[cid] = info["path"]
                     chart_captions[cid] = info["display"]

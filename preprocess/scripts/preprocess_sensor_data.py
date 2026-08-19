@@ -890,13 +890,49 @@ def write_inventory(info):
         for feature, st in sorted(feats.items()):
             days = sorted(st["days"])
             rows.append([sensor, feature, st["files"], st["bytes"],
-                         len(days), days[0], days[-1]])
+                         len(days), days[0], days[-1], "|".join(days)])
     out_path = os.path.join(OUTPUT_ROOT, "inventory.csv")
     with open(out_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["sensor", "feature", "files", "bytes", "days", "first_day", "last_day"])
+        w.writerow(["sensor", "feature", "files", "bytes", "days",
+                    "first_day", "last_day", "dates"])
         w.writerows(rows)
     logger.info(f"摸底表已写入: {out_path}")
+
+
+def load_inventory(path):
+    """读取摸底表(inventory.csv)为 info 结构，用于跳过摸底扫描直接预处理。
+
+    要求新版格式含 dates 列（实际日期列表，| 分隔）；旧格式或缺列返回 None。
+    """
+    if not os.path.isfile(path):
+        return None
+    info = {}
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            header = next(reader, None)
+            if not header or "dates" not in header:
+                return None
+            idx = {name: i for i, name in enumerate(header)}
+            for row in reader:
+                if len(row) <= idx["sensor"]:
+                    continue
+                sensor, feature = row[idx["sensor"]], row[idx["feature"]]
+                try:
+                    files = int(row[idx["files"]])
+                except (IndexError, ValueError):
+                    continue
+                dates = {x for x in row[idx["dates"]].split("|") if x}
+                info.setdefault(sensor, {})[feature] = {
+                    "files": files,
+                    "bytes": 0,
+                    "days": dates,
+                }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"读取摸底表失败 {path}: {exc}")
+        return None
+    return info or None
 
 
 def build_tasks(info, sensors, features, start, end, limit_days):
@@ -1153,12 +1189,23 @@ def main():
         scan_scope = (sensors_arg or "全部") + " / " + \
             (args.start or "最早") + " ~ " + (args.end or "最新")
         logger.info(f"摸底范围: 传感器 {scan_scope}")
-        info = discover(sensors=sensors_arg, start=args.start, end=args.end)
-        print_inventory(info)
-        show_sample(info)
-        write_inventory(info)
-        logger.info(f"摸底完成: 共 {sum(len(feats) for feats in info.values())} "
-                    f"个传感器-特征组合")
+        info = None
+        inv_path = os.path.join(OUTPUT_ROOT, "inventory.csv")
+        if args.mode != "inventory":
+            # 已有本桥摸底表则直接复用，跳过耗时扫描（--mode inventory 才会重扫）
+            info = load_inventory(inv_path)
+        if info is None:
+            logger.info("未找到可复用的摸底表，开始摸底扫描...")
+            info = discover(sensors=sensors_arg, start=args.start, end=args.end)
+            print_inventory(info)
+            show_sample(info)
+            write_inventory(info)
+            logger.info(f"摸底完成: 共 {sum(len(feats) for feats in info.values())} "
+                        f"个传感器-特征组合")
+        else:
+            logger.info(f"复用摸底表: {inv_path}（跳过摸底扫描，"
+                        f"共 {sum(len(feats) for feats in info.values())} "
+                        f"个传感器-特征组合）")
     else:
         info = {}
 

@@ -171,44 +171,41 @@ def _data_ready(charts_dir: str, stats_dir: str) -> bool:
                for _r, _d, files in os.walk(pos_dir) for fn in files)
 
 
-def _ensure_report_data(cwd: str, cfg: dict, period: dict) -> None:
-    """生成报告前检查图库/统计值，缺失则自动调用预处理管道（调度器 =
-    web 生成报告模块的拓展：缺数据先自己预处理，再生成报告）。"""
-    bd = cfg.get("bridge_data") or {}
-    if not bd.get("enabled"):
-        return
-    bridge = str(bd.get("bridge_name") or "").strip()
-    charts_dir, stats_dir = _data_dirs_for(cwd, cfg, period["dir_label"])
-    if _data_ready(charts_dir, stats_dir):
-        return
-    log.info("报告期 %s 图库/统计值缺失，准备自动预处理：%s、%s",
-             period["label"], charts_dir, stats_dir)
+def _load_preprocess_config(cwd: str) -> dict:
     pcfg_path = os.path.join(cwd, "preprocess", "config.json")
-    pcfg = {}
     try:
         with open(pcfg_path, encoding="utf-8") as f:
-            pcfg = json.load(f)
+            return json.load(f)
     except Exception as exc:  # noqa: BLE001
         log.warning("读取 preprocess/config.json 失败: %s", exc)
-    raw = str(pcfg.get("raw_data_dir") or "").strip()
-    daily = str(pcfg.get("daily_dir") or "").strip()
-    if not raw or not daily:
-        log.warning("缺数据但未配置 preprocess/config.json 的 raw_data_dir/"
-                    "daily_dir，跳过自动预处理")
-        return
+        return {}
+
+
+def _run_pipeline_cmd(cwd: str, raw: str, daily: str,
+                      charts_dir: str, stats_dir: str,
+                      bridge: str, start: str, end: str,
+                      period_mode: str = "quarterly",
+                      map_docx: str = "",
+                      skip_preprocess: bool = False,
+                      resume: bool = False,
+                      skip_charts: bool = False) -> None:
+    """调用 pipeline.py 执行预处理（日志+超时处理）。"""
     cmd = [sys.executable, os.path.join(cwd, "preprocess", "pipeline.py"),
            "--raw", raw, "--daily", daily,
            "--charts", charts_dir, "--stats", stats_dir,
-           "--start", period["start"], "--end", period["end"]]
+           "--start", start, "--end", end]
     if bridge:
         cmd += ["--bridge", bridge]
-    if period["mode"] == "yearly":
+    if period_mode == "yearly":
         cmd += ["--period", "yearly"]
-    map_docx = str(pcfg.get("sensor_map_docx") or "").strip()
+    if skip_preprocess:
+        cmd += ["--skip-preprocess"]
+    if resume:
+        cmd += ["--resume"]
+    if skip_charts:
+        # 只补日级数据时跳过出图/统计（如年度报告缺某个季度日级）
+        cmd += ["--skip-charts"]
     if map_docx:
-        if not os.path.isabs(map_docx):
-            map_docx = os.path.normpath(os.path.join(
-                os.path.dirname(pcfg_path), map_docx))
         cmd += ["--sensor-map-docx", map_docx]
     log.info("== 自动预处理命令: %s", " ".join(cmd))
     try:
@@ -218,6 +215,111 @@ def _ensure_report_data(cwd: str, cfg: dict, period: dict) -> None:
                       proc.returncode)
     except Exception as exc:  # noqa: BLE001
         log.exception("自动预处理异常: %s", exc)
+
+
+def _daily_period_ready(daily_root: str, tag: str,
+                        start: str, end: str) -> bool:
+    """判断某期日级数据是否完整：目录存在 + 日期覆盖 >= 90%。
+
+    预处理中断时目录可能残留但不完整（日期覆盖不全），据此可区分
+    “完整可复用”与“需要续跑/重跑”。
+    """
+    d = os.path.join(daily_root, f"daily_{tag}")
+    if not os.path.isdir(d):
+        return False
+    dates = set()
+    for _r, _dirs, files in os.walk(d):
+        for fn in files:
+            if fn.lower().endswith(".csv") and len(fn) >= 10:
+                dates.add(fn[:10])
+    if not dates:
+        return False
+    try:
+        expected = (dt.date.fromisoformat(end)
+                    - dt.date.fromisoformat(start)).days + 1
+    except ValueError:
+        expected = 1
+    coverage = len(dates) / max(expected, 1)
+    if coverage < 0.9:
+        log.info("日级数据不完整: %s（日期覆盖 %d/%d 天）",
+                 d, len(dates), expected)
+        return False
+    return True
+
+
+def _quarter_daily_plan(year: int):
+    """返回当年 4 个季度的 (季度号, 目录标签, 起, 止)。"""
+    plan = []
+    for q in range(1, 5):
+        s, e = quarter_range(year, q)
+        plan.append((q, f"{year}.{s.month}~{e.month}",
+                     s.isoformat(), e.isoformat()))
+    return plan
+
+
+def _ensure_report_data(cwd: str, cfg: dict, period: dict) -> None:
+    """生成报告前检查图库/统计值/日级数据，按需自动预处理。
+
+    调度器 = web 生成报告模块的拓展：
+      - 目标期图库/统计值已就绪 -> 什么都不做；
+      - 日级数据完整 -> 只重建图库/统计值/总结（--skip-preprocess）；
+      - 日级数据缺失/不完整 -> 先补预处理（断点续跑）再建图库/统计值；
+      - 年度报告：4 个季度日级都完整就直接建年度图库/统计值，缺哪个季度
+        就补哪个季度，不再整年重跑。
+    """
+    bd = cfg.get("bridge_data") or {}
+    if not bd.get("enabled"):
+        return
+    bridge = str(bd.get("bridge_name") or "").strip()
+    charts_dir, stats_dir = _data_dirs_for(cwd, cfg, period["dir_label"])
+    if _data_ready(charts_dir, stats_dir):
+        return
+    log.info("报告期 %s 图库/统计值缺失，准备自动预处理：%s、%s",
+             period["label"], charts_dir, stats_dir)
+    pcfg = _load_preprocess_config(cwd)
+    raw = str(pcfg.get("raw_data_dir") or "").strip()
+    daily = str(pcfg.get("daily_dir") or "").strip()
+    map_docx = str(pcfg.get("sensor_map_docx") or "").strip()
+    if map_docx and not os.path.isabs(map_docx):
+        map_docx = os.path.normpath(os.path.join(
+            cwd, "preprocess", map_docx))
+    if not raw or not daily:
+        log.warning("缺数据但未配置 preprocess/config.json 的 raw_data_dir/"
+                    "daily_dir，跳过自动预处理")
+        return
+    daily_root = os.path.join(daily, bridge) if bridge else daily
+
+    if period["mode"] == "yearly":
+        year = period["year"]
+        missing = []
+        for q, tag, qs, qe in _quarter_daily_plan(year):
+            if not _daily_period_ready(daily_root, tag, qs, qe):
+                missing.append((q, tag, qs, qe))
+        for q, tag, qs, qe in missing:
+            log.info("年度 %d 缺第 %d 季度日级数据(%s)，先补该季度预处理",
+                     year, q, tag)
+            qcharts, qstats = _data_dirs_for(cwd, cfg, tag)
+            _run_pipeline_cmd(cwd, raw, daily, qcharts, qstats,
+                              bridge, qs, qe, "quarterly", map_docx,
+                              resume=True, skip_charts=True)
+        # 日级齐了之后，只重建年度图库/统计值/总结
+        _run_pipeline_cmd(cwd, raw, daily, charts_dir, stats_dir,
+                          bridge, period["start"], period["end"],
+                          "yearly", map_docx, skip_preprocess=True)
+        return
+
+    # 季度模式
+    if _daily_period_ready(daily_root, period["dir_label"],
+                           period["start"], period["end"]):
+        # 日级已完整：只重建图库/统计值/总结
+        _run_pipeline_cmd(cwd, raw, daily, charts_dir, stats_dir,
+                          bridge, period["start"], period["end"],
+                          "quarterly", map_docx, skip_preprocess=True)
+    else:
+        # 日级缺失或不完整：全量预处理（--resume 续跑已生成的日文件）
+        _run_pipeline_cmd(cwd, raw, daily, charts_dir, stats_dir,
+                          bridge, period["start"], period["end"],
+                          "quarterly", map_docx, resume=True)
 
 
 def _run_report_generation(cwd: str, mode: str, cfg: dict = None,

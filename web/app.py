@@ -898,23 +898,6 @@ def api_bridge_data_check(bridge_id):
     })
 
 
-@app.route("/api/bridges/<bridge_id>/coverage")
-def api_bridge_coverage(bridge_id):
-    auth = _require_token()
-    if auth:
-        return auth
-    cfg = _config_for(bridge_id)
-    if not cfg or "error" in cfg:
-        return jsonify({"error": "配置不可用"}), 404
-    bcfg = cfg.get("bridge_data") or {}
-    if not bcfg.get("enabled", False):
-        return jsonify({"enabled": False, "message": "该桥未启用真实数据（bridge_data.enabled=false）"})
-    from report_agent.bridge_source import BridgeData
-    bridge = BridgeData(bcfg, base_dir=os.path.dirname(cfg.get("_config_path", ROOT)))
-    bridge.load()
-    return jsonify(bridge.coverage())
-
-
 @app.route("/api/bridges/<bridge_id>/analysis")
 def api_bridge_analysis(bridge_id):
     auth = _require_token()

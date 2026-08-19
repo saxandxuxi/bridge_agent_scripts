@@ -74,8 +74,6 @@
   <button class="active" data-tab="overview" onclick="showTab('overview')">总览</button>
   <button data-tab="run" onclick="showTab('run')">生成报告</button>
   <button data-tab="download" onclick="showTab('download')">下载报告</button>
-  <button data-tab="coverage" onclick="showTab('coverage')">数据覆盖</button>
-  <button data-tab="pending" onclick="showTab('pending')">待补清单</button>
   <button data-tab="upload" onclick="showTab('upload')">上传数据</button>
   <button data-tab="preprocess" onclick="showTab('preprocess')">数据处理</button>
   <button data-tab="config" onclick="showTab('config')">配置管理</button>
@@ -129,22 +127,6 @@
       <h3>已生成报告</h3>
       <div class="row"><select id="dlBridge"></select><button class="ghost" onclick="loadReports()">刷新</button></div>
       <table id="reportTable"><thead><tr><th>文件名</th><th>大小</th><th>生成时间</th><th></th></tr></thead><tbody></tbody></table>
-    </div>
-  </section>
-
-  <section id="tab-coverage" style="display:none">
-    <div class="panel">
-      <h3>真实数据覆盖度</h3>
-      <div class="row"><select id="covBridge"></select><button class="ghost" onclick="loadCoverage()">刷新</button></div>
-      <div id="covBody"></div>
-    </div>
-  </section>
-
-  <section id="tab-pending" style="display:none">
-    <div class="panel">
-      <h3>待完善清单</h3>
-      <div class="row"><select id="pendBridge"></select><button class="ghost" onclick="loadPending()">刷新</button></div>
-      <div id="pendBody"></div>
     </div>
   </section>
 
@@ -337,8 +319,6 @@ function showTab(name) {
   if (el) el.style.display = "block";
   if (name === "run") { fillBridgeSelect("runBridge"); loadRunTemplates(); }
   if (name === "download") { fillBridgeSelect("dlBridge"); loadReports(); }
-  if (name === "coverage") { fillBridgeSelect("covBridge"); loadCoverage(); }
-  if (name === "pending") { fillBridgeSelect("pendBridge"); loadPending(); }
   if (name === "upload") { fillBridgeSelect("srBridge"); resetUploadPanel(); }
   if (name === "preprocess") loadPreprocessConfig();
   if (name === "config") fillBridgeSelect("cfgBridge");
@@ -383,7 +363,7 @@ function bridgeCardHtml(b) {
   var last = "尚无运行记录";
   if (b.last_run) {
     last = (b.last_run.period && b.last_run.period.label ? b.last_run.period.label : "—") +
-      " · 待补图 " + (b.last_run.pending_charts || 0) + " · 缺失值 " + (b.last_run.missing_cells || 0);
+      " · 未填充单元格 " + (b.last_run.missing_cells || 0);
   }
   var h = '<div class="card"><h3><span class="dot ' + dot + '"></span>' + esc(b.name);
   if (b.running) h += ' <span class="badge" style="color:var(--warn)">运行中</span>';
@@ -567,41 +547,6 @@ function loadReports() {
         '<td><a href="/api/bridges/' + bridgeId + '/reports/' + encodeURIComponent(f.name) + q + '">下载</a></td>';
       tbody.appendChild(tr);
     });
-  }).catch(function (e) { showMsg(String(e), "err"); });
-}
-
-function loadCoverage() {
-  var bridgeId = $("covBridge").value;
-  if (!bridgeId) return;
-  $("covBody").innerHTML = "加载中…";
-  api("/api/bridges/" + bridgeId + "/coverage").then(function (c) {
-    if (c.enabled === false) { $("covBody").innerHTML = '<p class="muted">' + esc(c.message || "未启用真实数据") + '</p>'; return; }
-    var h = '<table><thead><tr><th>指标</th><th>特征</th><th>传感器数</th><th>有数据</th><th>最早</th><th>最晚</th></tr></thead><tbody>';
-    (c.metrics || []).forEach(function (m) {
-      h += "<tr><td>" + esc(m.label || m.metric) + "</td><td>" + esc(m.feature || "—") + "</td><td>" + m.sensor_count + "</td><td>" + m.with_data + "</td><td>" + esc(m.first_day || "—") + "</td><td>" + esc(m.last_day || "—") + "</td></tr>";
-    });
-    h += "</tbody></table><p class='muted'>传感器总数：" + c.sensor_count + "</p>";
-    $("covBody").innerHTML = h;
-  }).catch(function (e) { showMsg(String(e), "err"); $("covBody").innerHTML = ""; });
-}
-
-function loadPending() {
-  var bridgeId = $("pendBridge").value;
-  if (!bridgeId) return;
-  api("/api/bridges/" + bridgeId + "/run/status").then(function (st) {
-    var lr = st.last_run || {};
-    var pending = lr.pending_charts || [];
-    var missing = lr.missing_cells || [];
-    var h = '<h3 style="font-size:14px;margin:8px 0">图表待补（' + pending.length + '）</h3>';
-    if (!pending.length) h += '<p class="muted">上次运行没有待补图表</p>';
-    h += '<table><thead><tr><th>占位符</th><th>图注</th><th>原因</th></tr></thead><tbody>';
-    pending.forEach(function (p) {
-      h += "<tr><td><code>" + esc(p.chart_id) + "</code></td><td>" + esc(p.caption || "—") + "</td><td>" + esc(p.reason || "") + "</td></tr>";
-    });
-    h += "</tbody></table>";
-    h += '<h3 style="font-size:14px;margin:8px 0">未解析单元格（前 100，共 ' + missing.length + '）</h3>';
-    h += "<pre>" + esc(missing.slice(0, 100).join("\n")) + "</pre>";
-    $("pendBody").innerHTML = h;
   }).catch(function (e) { showMsg(String(e), "err"); });
 }
 

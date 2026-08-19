@@ -1,7 +1,7 @@
 {
   "template": "templates/赤石大桥_template_v2.docx",
   "output_dir": "outputs/_verify2",
-  "source_report": "D:/五座桥数据分析文件/赤石大桥.docx",
+  "source_report": "inputs/赤石大桥.docx",
   "bridge_data": {
     "enabled": true,
     "bridge_name": "赤石",

@@ -1,7 +1,7 @@
 {
   "template": "templates/洞庭湖大桥_template.docx",
   "output_dir": "outputs",
-  "source_report": "D:/五座桥数据分析文件/洞庭湖大桥.docx",
+  "source_report": "inputs/洞庭湖大桥.docx",
   "report": {
     "name_prefix": "",
     "with_timestamp": true

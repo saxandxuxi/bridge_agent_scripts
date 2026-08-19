@@ -27,3 +27,9 @@ def last_completed_quarter(today: dt.date = None) -> tuple:
     if q == 1:
         return today.year - 1, 4
     return today.year, q - 1
+
+
+def last_completed_year(today: dt.date = None) -> int:
+    """返回最近一个已完整结束的年份（当前年份永远不算已结束）。"""
+    today = today or dt.date.today()
+    return today.year - 1

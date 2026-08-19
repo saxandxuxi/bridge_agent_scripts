@@ -73,7 +73,8 @@ def _period_from_mode(mode: str, date_str: str = "",
     未给季度号也未给日期时，默认取最近一个已完整结束的季度。
     """
     import calendar
-    from report_agent.period_utils import last_completed_quarter, quarter_range
+    from report_agent.period_utils import (
+        last_completed_quarter, last_completed_year, quarter_range)
     if mode == "quarterly":
         if str(quarter).strip():
             try:
@@ -104,9 +105,28 @@ def _period_from_mode(mode: str, date_str: str = "",
     end = dt.date.fromisoformat(date_str) if date_str else dt.date.today()
     mode = mode or "quarterly"
     if mode == "yearly":
-        start = dt.date(end.year, 1, 1)
-        end = dt.date(end.year, 12, 31)
-        label = f"{end.year}年"
+        if str(year).strip():
+            try:
+                y = int(year)
+            except (TypeError, ValueError):
+                raise ValueError(f"年份无效: year={year}")
+            if y >= dt.date.today().year:
+                raise ValueError(f"{y}年尚未结束，请等该年度过完后再生成。")
+            start, end = dt.date(y, 1, 1), dt.date(y, 12, 31)
+            label = f"{y}年"
+            return {"start": start.isoformat(), "end": end.isoformat(),
+                    "label": label}
+        if not date_str:
+            y = last_completed_year()
+            start, end = dt.date(y, 1, 1), dt.date(y, 12, 31)
+            label = f"{y}年"
+            return {"start": start.isoformat(), "end": end.isoformat(),
+                    "label": label}
+        y = end.year
+        if y >= dt.date.today().year:
+            raise ValueError(f"{y}年尚未结束，请等该年度过完后再生成。")
+        start, end = dt.date(y, 1, 1), dt.date(y, 12, 31)
+        label = f"{y}年"
     elif mode == "monthly":
         start = dt.date(end.year, end.month, 1)
         end = dt.date(end.year, end.month,
@@ -1209,9 +1229,9 @@ def api_bridge_run(bridge_id):
 
             cmd = [sys.executable, os.path.join(ROOT, "run_agent.py"),
                    "--config", cfg_path, "--mode", mode]
-            if mode == "quarterly":
+            if mode in ("quarterly", "yearly"):
                 # 以 web 算好的报告期结束日为准传给 run_agent，避免两边
-                # 各自推导季度导致报告期不一致（如显示 4~6 却生成 1~3）
+                # 各自推导季度/年份导致报告期不一致（如选 2025 却生成 2026）
                 cmd += ["--date", period["end"]]
             elif date:
                 cmd += ["--date", date]

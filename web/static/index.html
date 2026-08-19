@@ -109,7 +109,7 @@
           <option value="4">第4季度</option>
         </select>
         <input type="number" id="runYear" min="2020" max="2100" step="1"
-               title="年份（默认今年）" style="width:90px">
+               title="年份（默认最近一个已结束的年份/季度，年度和季度模式用）" style="width:90px">
         <input type="date" id="runEnd" title="报告期结束日（留空=今天）">
         <input type="date" id="runStart" title="手动区间开始日（仅手动区间用）" style="display:none">
         <button onclick="startRun()">开始生成</button>
@@ -416,10 +416,19 @@ function quickRun(id) { showTab("run"); $("runBridge").value = id; startRun(); }
 function onModeChange() {
   var mode = $("runMode").value;
   var quarterly = mode === "quarterly";
+  var yearly = mode === "yearly";
   var manual = mode === "manual";
   $("runQuarter").style.display = quarterly ? "" : "none";
-  $("runYear").style.display = quarterly ? "" : "none";
+  $("runYear").style.display = (quarterly || yearly) ? "" : "none";
+  $("runEnd").style.display = (quarterly || yearly) ? "none" : "";
   $("runStart").style.display = manual ? "" : "none";
+  if (yearly) {
+    $("runYear").value = defaultYear();
+  } else if (quarterly) {
+    var _dq = defaultQuarter();
+    $("runQuarter").value = _dq.quarter;
+    $("runYear").value = _dq.year;
+  }
   checkPeriod();
 }
 function defaultQuarter() {
@@ -431,15 +440,18 @@ function defaultQuarter() {
   if (cur === 0) y -= 1;
   return { quarter: String(q), year: String(y) };
 }
+function defaultYear() {
+  // 最近一个已完整结束的年份（如 2026 年 8 月 -> 2025）
+  return String(new Date().getFullYear() - 1);
+}
 $("runMode").addEventListener("change", onModeChange);
 $("runEnd").addEventListener("change", checkPeriod);
 $("runBridge").addEventListener("change", function () {
   loadRunTemplates();
   checkPeriod();
 });
-var _dq = defaultQuarter();
-$("runQuarter").value = _dq.quarter;
-$("runYear").value = _dq.year;
+$("runQuarter").value = defaultQuarter().quarter;
+$("runYear").value = defaultYear();
 onModeChange();
 
 function checkPeriod() {
@@ -450,6 +462,8 @@ function checkPeriod() {
   if (mode === "quarterly") {
     url += "&quarter=" + encodeURIComponent($("runQuarter").value || "1") +
            "&year=" + encodeURIComponent($("runYear").value || String(new Date().getFullYear()));
+  } else if (mode === "yearly") {
+    url += "&year=" + encodeURIComponent($("runYear").value || defaultYear());
   } else if (mode === "manual" && $("runStart").value && $("runEnd").value) {
     url += "&start=" + $("runStart").value + "&end=" + $("runEnd").value;
   } else if ($("runEnd").value) {
@@ -477,6 +491,8 @@ function startRun() {
   if (body.mode === "quarterly") {
     body.quarter = $("runQuarter").value || "1";
     body.year = $("runYear").value || String(new Date().getFullYear());
+  } else if (body.mode === "yearly") {
+    body.year = $("runYear").value || defaultYear();
   }
   if (body.mode === "manual") body.start = $("runStart").value || "";
   body.auto_preprocess = $("runAutoPre").checked;

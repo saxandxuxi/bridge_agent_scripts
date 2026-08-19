@@ -9,9 +9,11 @@ APScheduler 未安装时自动降级为原轮询模式（每 30s 检查一次）
   weekday: 1-7（1=周一...7=周日），weekly 模式用
   day_of_month: 1-31，monthly/quarterly/yearly 模式用
   hour / minute: 触发时刻
-  start_date: YYYY-MM-DD，调度起始日期（仅 quarterly 生效）：
-    - 调度器启动时会先补跑“从 start_date 到今天的已结束季度”；
-    - 之后每到季度过完（次季首月 day_of_month 日）再生成上一季度。
+  start_date: YYYY-MM-DD，调度起始日期：
+    - quarterly：启动时先补跑“从 start_date 到今天的已结束季度”，
+      之后每到季度过完（次季首月 day_of_month 日）再生成上一季度；
+    - yearly：每年 1 月 day_of_month 日触发，生成上一年全年；
+      启动时若上一年度报告还不存在，也会补跑一份。
     例：start_date=2026-01-01，8 月启动 → 先补跑 Q1、Q2，再等 Q3 过完。
 
 也支持手动通过 run_agent.py --mode weekly 单次执行。
@@ -25,7 +27,8 @@ import subprocess
 import sys
 import time
 
-from .period_utils import last_completed_quarter, quarter_range
+from .period_utils import (last_completed_quarter, last_completed_year,
+                           quarter_range)
 from .config import load_config
 
 log = logging.getLogger("report-agent.scheduler")
@@ -128,10 +131,12 @@ def _run_report_generation(cwd: str, mode: str,
                  f"{year}.{start.month}~{end.month}",
                  start.isoformat(), end.isoformat())
     elif mode == "yearly":
-        # 年度任务在次年 1 月触发时，报告上一年全年
-        end = dt.date(dt.date.today().year - 1, 12, 31)
-        cmd += ["--date", end.isoformat()]
-        log.info("年度报告期截止: %s", end.isoformat())
+        # 年度任务在次年 1 月触发时，报告上一年全年；补跑时显式传 year
+        if year is None:
+            year = dt.date.today().year - 1
+        cmd += ["--year", str(year)]
+        log.info("年度报告期: %d年（%d-01-01 ~ %d-12-31）",
+                 year, year, year)
     try:
         proc = subprocess.run(cmd, cwd=cwd, timeout=1800)
         if proc.returncode != 0:
@@ -165,10 +170,53 @@ def _pending_quarters(start_date: dt.date, today: dt.date = None) -> list:
     return out
 
 
-def _catch_up_quarters(cwd: str, cfg: dict) -> None:
-    """调度器启动时补跑：从 schedule.start_date 到今天的已结束季度。"""
+def _yearly_report_exists(output_dir: str, year_label: str) -> bool:
+    """输出目录里是否已有某年度的年度报告（文件名含 “2025年” 等）。"""
+    if not output_dir or not os.path.isdir(output_dir):
+        return False
+    try:
+        for fn in os.listdir(output_dir):
+            if fn.lower().endswith(".docx") and year_label in fn:
+                return True
+    except OSError:
+        pass
+    return False
+
+
+def _catch_up_yearly(cwd: str, cfg: dict) -> None:
+    """年度模式启动补跑：上一完整年度还没有年度报告时生成一份。
+
+    例如 2026 年 8 月首次启动、start_date 不晚于 2025-01-01，
+    会自动补生成 2025 年年度报告（已存在则跳过，避免每次重启重跑）。
+    """
+    schedule = cfg.get("schedule", {})
+    if schedule.get("mode") != "yearly":
+        return
+    prev_year = last_completed_year()
+    # 起始日期保护：start_date 必须不晚于该年 1 月 1 日才补跑
+    start_str = str(schedule.get("start_date") or "").strip()
+    if start_str:
+        try:
+            if dt.date.fromisoformat(start_str) > dt.date(prev_year, 1, 1):
+                log.info("起始日期 %s 晚于 %d-01-01，不补跑 %d 年年度报告",
+                         start_str, prev_year, prev_year)
+                return
+        except ValueError:
+            log.warning("schedule.start_date 无效: %r，忽略补跑", start_str)
+            return
+    label = f"{prev_year}年"
+    if _yearly_report_exists(cfg.get("output_dir", "outputs"), label):
+        log.info("已存在 %d 年年度报告，跳过补跑", prev_year)
+        return
+    log.info("== 补跑 %d 年年度报告 ==", prev_year)
+    _run_report_generation(cwd, "yearly", year=prev_year)
+
+
+def _catch_up_pending(cwd: str, cfg: dict) -> None:
+    """调度器启动时补跑：季度模式补已结束季度，年度模式补上一年年度报告。"""
     schedule = cfg.get("schedule", {})
     if schedule.get("mode") != "quarterly":
+        _catch_up_yearly(cwd, cfg)
         return
     start_str = str(schedule.get("start_date") or "").strip()
     if not start_str:
@@ -246,8 +294,8 @@ def run_with_apscheduler(cfg: dict) -> None:
         coalesce=True,  # 多次错过只执行一次
     )
 
-    # 先补跑 start_date 之后已结束的季度，再进入周期调度
-    _catch_up_quarters(cwd, cfg)
+    # 先补跑 start_date 之后已结束的季度 / 上一年度报告，再进入周期调度
+    _catch_up_pending(cwd, cfg)
 
     # 下次执行时间
     next_time = next_run_time(dt.datetime.now(), schedule)
@@ -266,7 +314,7 @@ def run_with_polling(cfg: dict) -> None:
     cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     log.info("轮询模式启动：模式=%s，下次执行=%s", mode, next_run_time(dt.datetime.now(), schedule))
-    _catch_up_quarters(cwd, cfg)
+    _catch_up_pending(cwd, cfg)
     while True:
         now = dt.datetime.now()
         target = next_run_time(now, schedule)

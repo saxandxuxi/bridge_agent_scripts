@@ -106,6 +106,10 @@ pip install -r requirements.txt
 （例如现在 8 月、`start_date=2026-01-01`，启动后会自动生成第 1、2 季度报告，
 再等 10/1 生成第 3 季度。）
 
+> 如果这座桥要出**年度报告**，把 `schedule.mode` 改成 `"yearly"`：
+> 每年 1 月自动生成上一年全年报告；启动时上一年度报告不存在也会补跑一份。
+> 手动生成年度报告：`python run_agent.py --bridge mishuihe --mode yearly --year 2025`。
+
 ---
 
 ## 第 4 步：先手动生成一次，验证能跑通

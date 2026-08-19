@@ -935,6 +935,24 @@ def load_inventory(path):
     return info or None
 
 
+def _inventory_covers(inventory, start, end):
+    """判断摸底表日期范围是否覆盖请求时间段（start~end 留空表示不限）。"""
+    if not start and not end:
+        return True
+    all_days = set()
+    for feats in (inventory or {}).values():
+        for st in feats.values():
+            all_days.update(st.get("days") or ())
+    if not all_days:
+        return False
+    lo, hi = min(all_days), max(all_days)
+    if start and start < lo:
+        return False
+    if end and end > hi:
+        return False
+    return True
+
+
 def build_tasks(info, sensors, features, start, end, limit_days):
     tasks = []
     start_d = dt.date.fromisoformat(start) if start else None
@@ -1196,6 +1214,12 @@ def main():
         if args.mode != "inventory":
             # 已有本桥摸底表则直接复用，跳过耗时扫描（--mode inventory 才会重扫）
             info = load_inventory(inv_path)
+            if info is not None and not _inventory_covers(
+                    info, args.start, args.end):
+                logger.warning("摸底表未覆盖请求时间段(%s ~ %s)，"
+                               "重新摸底扫描", args.start or "最早",
+                               args.end or "最新")
+                info = None
         if info is None:
             logger.info("未找到可复用的摸底表，开始摸底扫描...")
             info = discover(sensors=sensors_arg, start=args.start, end=args.end)
@@ -1214,6 +1238,10 @@ def main():
     if args.mode in ("preprocess", "all") and not args.traffic_only:
         tasks = build_tasks(info, sensors_arg, args.features,
                             args.start, args.end, args.limit_days)
+        if not tasks:
+            logger.warning("没有符合条件的任务：请确认原始数据目录结构、摸底表"
+                           "是否覆盖 %s ~ %s，以及 --bridge 桥名是否正确",
+                           args.start or "最早", args.end or "最新")
         processed = run_preprocess(tasks)
         logger.info(f"本次运行结束: 新完成任务 {processed} 个")
 

@@ -623,7 +623,7 @@ function savePreprocessConfig() {
   if (!$("ppRaw").value.trim() || !$("ppDaily").value.trim()
       || !$("ppBridge").value.trim()) {
     showMsg("秒级数据目录、日级数据目录、桥名为必填项", "err");
-    return;
+    return false;
   }
   var body = {
     raw_data_dir: $("ppRaw").value.trim(),
@@ -641,10 +641,11 @@ function savePreprocessConfig() {
       showMsg(msg, "ok");
     })
     .catch(function (e) { showMsg(String(e), "err"); });
+  return true;
 }
 
 function runPreprocess() {
-  savePreprocessConfig();
+  if (!savePreprocessConfig()) return;
   var body = {
     raw_data_dir: $("ppRaw").value.trim(),
     daily_dir: $("ppDaily").value.trim(),

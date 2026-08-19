@@ -159,7 +159,7 @@ def _period_dir_base(cfg: Optional[Dict] = None) -> str:
     cd = str(bd.get("charts_dir", "") or "").replace("\\", "/")
     for marker in ("图库_", "图库"):
         idx = cd.find(marker)
-        if idx > 0:
+        if idx >= 0:
             base = cd[:idx].rstrip("/")
             return base if os.path.isabs(base) else os.path.normpath(
                 os.path.join(ROOT, base))
@@ -422,8 +422,7 @@ def api_bridge_config_update(bridge_id):
     if not cfg_path:
         return jsonify({"error": f"未找到桥梁 {bridge_id} 的配置"}), 404
     try:
-        from report_agent.config import load_config
-        cfg = load_config(cfg_path)
+        cfg = _raw_config(cfg_path)
     except Exception as exc:  # noqa: BLE001
         return jsonify({"error": f"配置不可用: {exc}"}), 400
 
@@ -1091,9 +1090,9 @@ def _update_bridge_data_dirs(bridge_id: str, stats_dir: str,
     if not cfg_path:
         return
     try:
-        from report_agent.config import load_config
-        cfg = load_config(cfg_path)
-    except Exception:  # noqa: BLE001
+        cfg = _raw_config(cfg_path)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("读取桥配置失败 %s: %s", cfg_path, exc)
         return
     bd = cfg.setdefault("bridge_data", {})
     bd["stats_dir"] = _portable_path(stats_dir)
@@ -1322,10 +1321,14 @@ def api_bridge_scheduler_start(bridge_id):
     st = _schedulers.get(bridge_id)
     if st and st.get("proc") and st["proc"].poll() is None:
         return jsonify({"error": "调度器已在运行", "pid": st["proc"].pid}), 409
+    logs_dir = os.path.join(ROOT, "outputs", "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    log_path = os.path.join(logs_dir, f"scheduler_{bridge_id}.log")
+    log_fh = open(log_path, "ab")
     proc = subprocess.Popen(
         [sys.executable, os.path.join(ROOT, "serve_scheduler.py"), "--bridge", bridge_id],
         cwd=ROOT, env=_subprocess_env(),
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdout=log_fh, stderr=subprocess.STDOUT,
     )
     _schedulers[bridge_id] = {"proc": proc, "started_at": dt.datetime.now().isoformat(timespec="seconds")}
     return jsonify({"ok": True, "pid": proc.pid})
@@ -1510,14 +1513,8 @@ def api_preprocess_run():
     # 桥名必传：daily 输出按 <桥名>/daily_<期> 分目录（用规范全名）
     bridge_name = str(data.get("bridge_name") or "").strip()
     if not bridge_name:
-        try:
-            with open(PREPROCESS_CONFIG, "r", encoding="utf-8") as f:
-                bridge_name = str((json.load(f) or {}).get(
-                    "bridge_name") or "").strip()
-        except Exception:
-            pass
-    if bridge_name:
-        cmd += ["--bridge", _canon_bridge_name(bridge_name)]
+        return jsonify({"error": "桥名为必填项（数据处理页填写桥名）"}), 400
+    cmd += ["--bridge", _canon_bridge_name(bridge_name)]
     # 时间范围（只处理该时间段数据）
     start = str(data.get("start") or "").strip()
     end = str(data.get("end") or "").strip()

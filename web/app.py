@@ -974,17 +974,35 @@ def _run_pipeline(period: Dict, charts_dir: str, stats_dir: str,
     if map_docx:
         cmd += ["--sensor-map-docx", map_docx]
     st["pipeline_cmd"] = " ".join(cmd)
+    # 输出实时写入日志文件，超时被杀时也能看到卡在哪一步
+    logs_dir = os.path.join(ROOT, "outputs", "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    log_path = os.path.join(logs_dir, "web_pipeline.log")
+    try:
+        timeout = int(os.environ.get("REPORT_WEB_PIPELINE_TIMEOUT", 43200))
+    except (TypeError, ValueError):
+        timeout = 43200
+    log_fh = open(log_path, "wb")
     proc = subprocess.Popen(cmd, cwd=ROOT, env=_subprocess_env(),
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                            stdout=log_fh, stderr=subprocess.STDOUT)
     st["pipeline_pid"] = proc.pid
     try:
-        out, _ = proc.communicate(timeout=7200)
+        proc.wait(timeout=timeout)
+        rc = proc.returncode
     except Exception as exc:  # noqa: BLE001
         proc.kill()
-        st["pipeline_error"] = str(exc)
-        return 1
-    st["pipeline_log_tail"] = out.decode("utf-8", errors="replace")[-4000:]
-    return proc.returncode
+        st["pipeline_error"] = (f"数据处理超过 {timeout // 3600} 小时被终止，"
+                                f"详见日志尾部: {exc}")
+        rc = 1
+    finally:
+        log_fh.close()
+    try:
+        with open(log_path, "rb") as f:
+            st["pipeline_log_tail"] = f.read()[-4000:].decode(
+                "utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        st["pipeline_log_tail"] = ""
+    return rc
 
 
 def _update_bridge_data_dirs(bridge_id: str, stats_dir: str,

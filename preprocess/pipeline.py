@@ -211,9 +211,13 @@ def main() -> int:
         tag = period_tag(start, end)
         daily_base = os.path.join(daily, args.bridge) if (daily and args.bridge) \
             else daily
-        daily_data = ((os.path.join(daily_base, f"daily_{tag}") if tag
-                       else os.path.join(daily_base, "daily"))
-                      if daily_base else "")
+        if args.period == "yearly" and daily_base:
+            # 年度：daily 根目录传桥根，build_chart_library 自动汇总 daily_* 子目录
+            daily_data = daily_base
+        else:
+            daily_data = ((os.path.join(daily_base, f"daily_{tag}") if tag
+                           else os.path.join(daily_base, "daily"))
+                          if daily_base else "")
         cmd = [
             py, os.path.join(ROOT, "scripts", "build_chart_library.py"),
             "--daily-root", daily_data or ".",
@@ -225,6 +229,9 @@ def main() -> int:
         # 建图库固定跳过逐传感器图，只生成按监测部位合并的图（更省时，
         # 报告只用合并图）
         cmd += ["--skip-per-sensor"]
+        if args.period == "yearly" and start and len(start) >= 4:
+            # 年度：让 build_chart_library 按年份汇总桥根下所有季度 daily_* 子目录
+            cmd += ["--year", start[:4]]
         # 图库/统计值目录名自动带年月范围（如 图库_2026.1~3）；
         # 仅命令行显式指定 --charts/--stats 时才用固定目录
         if args.charts:

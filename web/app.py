@@ -174,12 +174,14 @@ def _quarter_dirs(cfg: Optional[Dict], label: str) -> tuple:
     def _with_bridge(p: str) -> str:
         return os.path.join(p, bridge) if bridge else p
     from report_agent.config import resolve_bridge_subdir
+    # 年度显示标签(2026年)与数据目录标签(2026.1~12)统一
+    dir_label = re.sub(r"^(\d{4})年$", r"\1.1~12", label or "") or label
     if not label:
         charts = _with_bridge(os.path.join(base, "图库"))
         stats = _with_bridge(os.path.join(base, "统计值"))
     else:
-        charts = _with_bridge(os.path.join(base, f"图库_{label}"))
-        stats = _with_bridge(os.path.join(base, f"统计值_{label}"))
+        charts = _with_bridge(os.path.join(base, f"图库_{dir_label}"))
+        stats = _with_bridge(os.path.join(base, f"统计值_{dir_label}"))
     return (resolve_bridge_subdir(charts, bridge),
             resolve_bridge_subdir(stats, bridge))
 

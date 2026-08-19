@@ -41,7 +41,9 @@ import numpy as np
 import build_chart_library as bcl
 
 DEFAULT_DAILY_ROOT = r"D:\preprocess_sensor_data\daily"
-DEFAULT_LIB_ROOT = "..\\"
+# 统计值目录的上级 = 项目 preprocess/ 目录（按脚本位置计算，与运行目录无关，
+# 避免从项目根目录直接运行时把 ..\统计值_<期> 解析到桌面等错误位置）
+DEFAULT_LIB_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # 传感器对照表(固定产物，不随季度变化)统一放 preprocess/传感器对照/
 DEFAULT_SENSOR_MAP_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

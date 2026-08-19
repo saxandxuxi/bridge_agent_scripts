@@ -62,7 +62,8 @@ except Exception:
 
 # ---------------- 默认路径（可按需修改/用命令行参数覆盖） ----------------
 DEFAULT_DAILY_ROOT = r"D:\preprocess_sensor_data\daily"   # 预处理后的 daily 目录
-DEFAULT_LIB_ROOT = ".\\preprocess"                        # 图库/统计值 的上级目录(相对运行目录)
+# 图库/统计值的上级目录 = 项目 preprocess/ 目录（按脚本位置计算，与运行目录无关）
+DEFAULT_LIB_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # 传感器对照表（固定产物，不随季度变化，统一挂在 preprocess/ 下）
 DEFAULT_SENSOR_MAP_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

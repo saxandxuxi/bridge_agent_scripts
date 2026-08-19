@@ -97,10 +97,14 @@ def main() -> int:
 
         report_date = args.date
         if (args.mode == "quarterly" and args.quarter is None
-                and not args.date):
+                and not args.date and not args.year):
             # 未指定季度/日期：默认最近一个已完整结束的季度
             from report_agent.agent import last_completed_quarter
             args.year, args.quarter = last_completed_quarter()
+        elif (args.mode == "quarterly" and args.quarter is None
+                and args.year is not None):
+            print("[错误] 季度模式下需要同时提供 --quarter（1~4）", file=sys.stderr)
+            return 1
         if args.mode == "quarterly" and args.quarter is not None:
             if not 1 <= args.quarter <= 4:
                 print(f"[错误] 季度必须是 1~4，收到: {args.quarter}", file=sys.stderr)

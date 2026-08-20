@@ -93,6 +93,32 @@ def build_daily_records(records: List[Dict], value_column: str) -> List[Dict]:
     return rows
 
 
+def _bridge_key(s) -> str:
+    """桥名归一化：去空白、去“大桥/特大桥”后缀、转小写（与 bridges 一致）。"""
+    s = str(s or "").strip().lower().replace(" ", "")
+    for suffix in ("特大桥", "大桥"):
+        if s.endswith(suffix):
+            s = s[: -len(suffix)]
+    return s
+
+
+def _is_other_registered_bridge_name(name: str, current: str) -> bool:
+    """name_prefix 是否属于“其他已注册桥”的桥名（如配置残留 赤石大桥，
+    但当前桥是 洣水河特大桥）。是则报告名必须跟随当前桥。"""
+    if not name:
+        return False
+    try:
+        from .bridges import list_bridges
+        bridges = list_bridges()
+    except Exception:  # noqa: BLE001
+        return False
+    nk = _bridge_key(name)
+    ck = _bridge_key(current)
+    if not nk or nk == ck:
+        return False
+    return any(_bridge_key(b.get("name")) == nk for b in bridges)
+
+
 class ReportAgent:
     def __init__(self, config: Dict):
         self.cfg = config
@@ -418,6 +444,14 @@ class ReportAgent:
         # 最终兜底用模板文件名。始终附加日期+时间后缀。
         name_cfg = self.cfg.get("report", {})
         name_prefix = name_cfg.get("name_prefix", "")
+        # 桥模式下报告名必须跟随当前桥：若配置里的 name_prefix 是其他已注册
+        # 桥的桥名（历史模板/源报告上传残留，如 赤石大桥），自动纠正为当前桥，
+        # 避免“生成洣水河却输出 赤石大桥.docx”。
+        if bridge is not None and bridge.bridge_name:
+            bn = bridge.bridge_name
+            if (not name_prefix
+                    or _is_other_registered_bridge_name(name_prefix, bn)):
+                name_prefix = bn
         if not name_prefix:
             source_report = self.cfg.get("source_report", "")
             if source_report:

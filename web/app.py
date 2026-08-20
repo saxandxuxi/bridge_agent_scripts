@@ -1101,6 +1101,27 @@ def _run_pipeline(period: Dict, charts_dir: str, stats_dir: str,
     return rc
 
 
+def _bridge_key(s) -> str:
+    """桥名归一化：去空白、去“大桥/特大桥”后缀、转小写。"""
+    s = str(s or "").strip().lower().replace(" ", "")
+    for suffix in ("特大桥", "大桥"):
+        if s.endswith(suffix):
+            s = s[: -len(suffix)]
+    return s
+
+
+def _is_other_bridge_prefix(name: str, current: str) -> bool:
+    """name_prefix 是否属于其他已注册桥的桥名（用于纠正配置残留）。"""
+    if not name:
+        return False
+    nk = _bridge_key(name)
+    ck = _bridge_key(current)
+    if not nk or nk == ck:
+        return False
+    return any(_bridge_key(b.get("name")) == nk
+               for b in list_bridges(REGISTRY))
+
+
 def _update_bridge_data_dirs(bridge_id: str, stats_dir: str,
                              charts_dir: str) -> None:
     """把桥配置的 bridge_data 路径切到季度目录。
@@ -1125,6 +1146,12 @@ def _update_bridge_data_dirs(bridge_id: str, stats_dir: str,
         os.path.join(map_dir, "传感器编号名称.json"))
     bd["overview"] = _portable_path(os.path.join(stats_dir, "总览.json"))
     bridge = bd.get("bridge_name", "") or ""
+    # 报告名跟随当前桥：name_prefix 为空或残留其他已注册桥名（如配置里还写着
+    # 赤石大桥，但当前桥是洣水河特大桥）时自动纠正，避免“选洣水出赤石”。
+    rep = cfg.setdefault("report", {})
+    cur_prefix = str(rep.get("name_prefix") or "").strip()
+    if bridge and (not cur_prefix or _is_other_bridge_prefix(cur_prefix, bridge)):
+        rep["name_prefix"] = bridge
     from report_agent.config import name_dict_candidates
     nd_dir = os.path.join(map_dir, "传感器名称对照")
     bd["name_dict"] = ""

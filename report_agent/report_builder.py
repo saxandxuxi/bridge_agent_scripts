@@ -1121,11 +1121,30 @@ def build_report(
     return unfilled
 
 
-def _collapse_extra_spaces(doc) -> int:
-    """把段落/表格里连续的 ASCII 空格(2 个及以上)收成 1 个。
+_UNIT_SPACE_RE = re.compile(
+    r"(?P<num>-?\d+(?:\.\d+)?)"
+    r"(?P<unit>mm/s²|mm/s2|m/s²|m/s2|mm/s|m/s|km/h|kN|MPa)(?![A-Za-z0-9])")
+_UNIT_TRAIL_RE = re.compile(
+    r"(mm/s²|mm/s2|m/s²|m/s2|mm/s|m/s|km/h|kN|MPa) +(?=[。，；、！？!?]|$)")
 
-    修复“5.5  m/s²”“6.9m/s² ”这类数值与单位之间的多余空格；只动 run 级
-    文本，不改其它排版。返回修改的 run 数。
+
+def _normalize_unit_spacing(text: str) -> str:
+    """数值与字母复合单位之间补一个空格（6.9m/s² -> 6.9 m/s²）、
+    去掉单位后多余空格（6.9 m/s²  -> 6.9 m/s²）。℃/% 等符号单位不动。"""
+    if not text:
+        return text
+    t = re.sub(r" {2,}", " ", text)
+    t = _UNIT_SPACE_RE.sub(
+        lambda m: f"{m.group('num')} {m.group('unit')}", t)
+    t = _UNIT_TRAIL_RE.sub(r"\1", t)
+    return t.strip()
+
+
+def _collapse_extra_spaces(doc) -> int:
+    """把段落/表格里的多余空格、数值与单位间距统一收口。
+
+    修复“5.5  m/s²”“6.9m/s² ”“6.9 m/s² ”这类数值与单位之间的空格问题；
+    只动 run 级文本，不改其它排版。返回修改的 run 数。
     """
     fixed = 0
 
@@ -1133,8 +1152,9 @@ def _collapse_extra_spaces(doc) -> int:
         nonlocal fixed
         for r in getattr(pa, "runs", []):
             t = r.text or ""
-            if "  " in t:
-                r.text = re.sub(r" {2,}", " ", t)
+            nt = _normalize_unit_spacing(t)
+            if nt != t:
+                r.text = nt
                 fixed += 1
 
     for pa in _walk_paragraphs(doc):
@@ -1146,7 +1166,7 @@ def _collapse_extra_spaces(doc) -> int:
                 for pa in getattr(cell, "paragraphs", []) or []:
                     _fix_para(pa)
     if fixed:
-        log.info("收尾修补：%d 处多余连续空格已归一", fixed)
+        log.info("收尾修补：%d 处空格/单位间距已归一", fixed)
     return fixed
 
 

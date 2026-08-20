@@ -467,6 +467,7 @@ class ReportAgent:
         )
 
         # 数据链路日志：每个填入数值的来源与计算链（找不到的会标“未找到”）
+        verify_warns = []
         if lineage:
             out_dir_abs = os.path.abspath(self.cfg.get("output_dir", "outputs"))
             logs_dir = os.path.join(
@@ -491,6 +492,44 @@ class ReportAgent:
         else:
             lineage_path = ""
 
+        # LLM 报告审查：对照成品原文，检查表格/索引/图片/统计逻辑/总结段落
+        report_review = None
+        try:
+            from .reviewer import ReportReviewer, _read_docx_text
+            reviewer = ReportReviewer(self.cfg.get("llm"))
+            if reviewer.available():
+                # 数据链路摘要：只给“未找到/回退”项，避免把整份链路塞给 LLM
+                missed = [e for e in lineage if e.get("结果") in ("未找到", "回退")]
+                lineage_digest = json.dumps(
+                    missed[:200], ensure_ascii=False, default=str)
+                table_warnings = json.dumps(
+                    verify_warns[:100], ensure_ascii=False, default=str)
+                report_review = reviewer.review_report(
+                    _read_docx_text(self.cfg.get("source_report", "")),
+                    _read_docx_text(out_path),
+                    lineage_digest=lineage_digest,
+                    table_warnings=table_warnings,
+                )
+                n_issues = len(report_review.get("issues", []))
+                if n_issues:
+                    log.warning("报告审查发现 %d 处问题", n_issues)
+                    for iss in report_review.get("issues", []):
+                        log.warning("  - [%s] %s",
+                                    iss.get("type", "other"),
+                                    iss.get("detail", ""))
+                else:
+                    log.info("报告审查完成：未发现问题")
+                out_dir_abs = os.path.abspath(self.cfg.get("output_dir", "outputs"))
+                logs_dir = os.path.join(os.path.dirname(out_dir_abs), "logs")
+                os.makedirs(logs_dir, exist_ok=True)
+                review_path = os.path.join(
+                    logs_dir, f"review_report_{period.get('label') or 'report'}.json")
+                with open(review_path, "w", encoding="utf-8") as f:
+                    json.dump(report_review, f, ensure_ascii=False, indent=2)
+                log.info("报告审查结果已保存: %s", review_path)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("报告审查异常（不影响报告生成）: %s", exc)
+
         summary = {
             "output": out_path,
             "period": {
@@ -509,6 +548,7 @@ class ReportAgent:
             "pending_charts": pending_charts,
             "missing_cells": missing_sinks[:500],
             "chart_gaps": chart_gaps if bridge is not None else [],
+            "review": report_review,
         }
         # 生成结束后刷新桥数据状态，让 match_stats 反映本次运行的实际命中情况
         if bridge is not None:

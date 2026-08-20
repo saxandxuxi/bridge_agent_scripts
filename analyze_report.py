@@ -27,6 +27,7 @@ import sys
 from report_agent.config import load_config
 from report_agent.llm_classifier import ENV_KEY_VARS
 from report_agent.recognizer import annotate_docx, print_summary, recognize, save_analysis
+from report_agent.reviewer import ReportReviewer, _read_docx_text
 
 
 def _setup_logging(log_path: str) -> None:
@@ -217,6 +218,29 @@ def main() -> int:
                      result["replaced_numbers"], result["skipped_numbers_split_runs"],
                      result["replaced_images"], result.get("replaced_chart_texts", 0),
                      result.get("replaced_texts", 0), len(analysis.get("data_values", {})))
+            # 模板审查：对照原文，检查占位符/方位/静态值/篡改
+            try:
+                reviewer = ReportReviewer(llm_cfg)
+                review = reviewer.review_template(
+                    _read_docx_text(args.input),
+                    _read_docx_text(args.annotate),
+                )
+                n_issues = len(review.get("issues", []))
+                if n_issues:
+                    log.warning("模板审查发现 %d 处问题（详见 review_template_%s.json）",
+                                n_issues, os.path.splitext(os.path.basename(args.input))[0])
+                else:
+                    log.info("模板审查完成：未发现问题")
+                review_out = os.path.join(
+                    "outputs", "analysis",
+                    "review_template_" + os.path.splitext(os.path.basename(args.input))[0] + ".json",
+                )
+                os.makedirs(os.path.dirname(review_out), exist_ok=True)
+                with open(review_out, "w", encoding="utf-8") as f:
+                    json.dump(review, f, ensure_ascii=False, indent=2)
+                log.info("模板审查结果已保存: %s", review_out)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("模板审查异常（不影响模板生成）: %s", exc)
 
     # 在 annotate 之后保存，确保 data_values 被写入 JSON
     save_analysis(analysis, out)

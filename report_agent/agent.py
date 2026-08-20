@@ -326,16 +326,22 @@ class ReportAgent:
                 from .report_builder import _paragraph_text, _walk_paragraphs
                 tpl_doc = _Doc(self.cfg.get("template", ""))
                 extra_ids = []
+                recent = []  # 图表占位符前面的最近正文（用于左右幅等方位定向）
                 for para in _walk_paragraphs(tpl_doc):
                     t = _paragraph_text(para).strip()
                     m = re.fullmatch(r"\{\{chart\.([^}]+)\}\}", t)
                     if not m:
+                        if t:
+                            recent.append(t)
+                            if len(recent) > 8:
+                                recent = recent[-8:]
                         continue
                     cid = m.group(1)
                     if cid not in chart_images:
-                        extra_ids.append(cid)
-                for cid in extra_ids:
-                    info = bridge.resolve_chart_info(cid, cid)
+                        extra_ids.append((cid, list(recent)))
+                for cid, ctx in extra_ids:
+                    # 传最近正文作上下文，让“右幅”节能定向到右幅传感器
+                    info = bridge.resolve_chart_info(cid, cid, context=ctx)
                     if not info:
                         # 匹配不到也生成占位图并记入待补清单，避免整个报告
                         # 因个别图表占位符匹配失败而中断（报告仍可正常生成）

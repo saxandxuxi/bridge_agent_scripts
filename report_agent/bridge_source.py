@@ -2424,6 +2424,10 @@ class BridgeData:
         if chart_id in self.chart_map:
             return str(self.chart_map[chart_id])
 
+        ctx_texts = context if isinstance(context, (list, tuple)) else (
+            [context] if context else [])
+        side = self._context_side(ctx_texts, caption)
+
         # 0) 精确传感器占位符：chart_sensor_<编号>_<图型>
         #    （如 chart_sensor_304_trend / chart_sensor_184_histogram，
         #      由“304(xJsd)_时程曲线”等行识别生成）
@@ -2439,9 +2443,15 @@ class BridgeData:
             metric, pos, _kind, n = pp
             sids = self._sensors_at_position(pos, metric)
             if sids:
+                if side:
+                    # 同一位置分左右幅/上下游时，按节上下文定向，
+                    # 避免“右幅”节取到“左幅”传感器
+                    sided = [s for s in sids
+                             if side in (self._position_for_sensor(s) or "")]
+                    if sided:
+                        sids = sided
                 return sids[(n - 1) % len(sids)]
 
-        ctx_texts = context if isinstance(context, (list, tuple)) else ([context] if context else [])
         text = " ".join([caption] + [str(x) for x in ctx_texts if x]).strip()
         parsed = self._parse_chart_id(chart_id)
         metric_from_id = parsed[0] if parsed else None
@@ -2467,6 +2477,11 @@ class BridgeData:
         if location:
             loc_sids = self._location_sensors(found_metric or "temperature", location)
             if loc_sids:
+                if side:
+                    sided = [s for s in loc_sids
+                             if side in (self._position_for_sensor(s) or "")]
+                    if sided:
+                        loc_sids = sided
                 # 按 (指标, 位置, 图型) 分别计数：
                 # 时程图 1/2 -> 传感器 1/2，直方图 3/4 -> 传感器 1/2
                 kind = parsed[1] if parsed else "trend"
@@ -2490,6 +2505,37 @@ class BridgeData:
                 return sids[parsed[2] - 1]
 
         # 3) 泛型序号 + 指标回退（如 chart_trend_35 + 倾角 -> rotation 第35个，越界则失败）
+
+    @staticmethod
+    def _context_side(context, caption=""):
+        """从最近的上下文/图注里找明确方位词（右幅/左幅/下游/上游/右侧/左侧）。
+
+        同一句同时出现左右（如“左幅、右幅”）视为无明确方向，继续往前找。
+        用于“炎陵侧边跨跨中截面”这类同时存在左/右幅同名位置时按节定向。
+        """
+        texts = [str(x) for x in (context or []) if x]
+        if caption:
+            texts.append(str(caption))
+        for t in reversed(texts):
+            if "左幅" in t and "右幅" in t:
+                continue
+            if "左幅" in t:
+                return "左幅"
+            if "右幅" in t:
+                return "右幅"
+            if "上游" in t and "下游" in t:
+                continue
+            if "上游" in t:
+                return "上游"
+            if "下游" in t:
+                return "下游"
+            if "左侧" in t and "右侧" in t:
+                continue
+            if "左侧" in t:
+                return "左侧"
+            if "右侧" in t:
+                return "右侧"
+        return ""
         if parsed and parsed[0] is None and found_metric:
             sids = self.sensors_for_metric(found_metric)
             # 按监测部位分组，先位置后传感器（避免同位置多传感器重复占用前几个序号）

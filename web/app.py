@@ -1555,8 +1555,11 @@ def api_bridge_llm_test(bridge_id):
                         "error": "未配置 API Key 或供应商地址（请先保存配置）"})
     try:
         resp = cls._chat([{"role": "user", "content": "只回复 OK 两个字"}])
-        ok = bool(resp and str(resp).strip())
-        return jsonify({"ok": ok, "reply": str(resp or "").strip()[:100]})
+        if resp and str(resp).strip():
+            return jsonify({"ok": True,
+                            "reply": str(resp).strip()[:100]})
+        return jsonify({"ok": False,
+                        "error": "模型返回为空（请检查模型名是否正确、是否已开通）"})
     except Exception as exc:  # noqa: BLE001
         return jsonify({"ok": False, "error": str(exc)})
 

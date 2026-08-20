@@ -46,6 +46,30 @@ logging.basicConfig(
 WEB_TOKEN = os.environ.get("REPORT_WEB_TOKEN", "")
 REGISTRY = os.environ.get("REPORT_WEB_REGISTRY", os.path.join(ROOT, "bridges", "registry.json"))
 
+# LLM 供应商：后端统一配置 API 地址，前端只需选供应商 + 填 API Key
+LLM_PROVIDERS = {
+    "qwen": {
+        "label": "通义千问 QWEN",
+        "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "model": "qwen-plus",
+    },
+    "zhipu": {
+        "label": "智谱 GLM",
+        "api_base": "https://open.bigmodel.cn/api/paas/v4",
+        "model": "glm-4-flash",
+    },
+    "deepseek": {
+        "label": "DeepSeek",
+        "api_base": "https://api.deepseek.com/v1",
+        "model": "deepseek-chat",
+    },
+    "moonshot": {
+        "label": "Kimi / Moonshot",
+        "api_base": "https://api.moonshot.cn/v1",
+        "model": "moonshot-v1-8k",
+    },
+}
+
 PREPROCESS_DIR = os.path.join(ROOT, "preprocess")
 PREPROCESS_CONFIG = os.path.join(PREPROCESS_DIR, "config.json")
 PREPROCESS_STATUS = os.path.join(PREPROCESS_DIR, "status.json")
@@ -460,6 +484,19 @@ def api_bridge_config_update(bridge_id):
                     pass
     if isinstance(data.get("report"), dict) and data["report"].get("name_prefix") is not None:
         cfg.setdefault("report", {})["name_prefix"] = str(data["report"]["name_prefix"])
+    # LLM：供应商/API Key/模型。选择供应商时后端自动配 API 地址
+    if isinstance(data.get("llm"), dict):
+        llm_in = data["llm"]
+        llm_cfg = cfg.setdefault("llm", {})
+        for k in ("provider", "api_key", "model", "api_base", "enabled"):
+            if k in llm_in and llm_in[k] is not None:
+                llm_cfg[k] = llm_in[k]
+        prov = str(llm_cfg.get("provider") or "").strip()
+        if prov in LLM_PROVIDERS:
+            if not str(llm_in.get("api_base") or "").strip():
+                llm_cfg["api_base"] = LLM_PROVIDERS[prov]["api_base"]
+            if not str(llm_cfg.get("model") or "").strip():
+                llm_cfg["model"] = LLM_PROVIDERS[prov]["model"]
 
     _save_config(cfg, cfg_path)
     return jsonify({"ok": True, "config_path": cfg_path})
@@ -1478,6 +1515,48 @@ def api_bridge_review_file(bridge_id):
         if os.path.isfile(p):
             return send_file(p, as_attachment=True, download_name=name)
     return jsonify({"error": "文件不存在"}), 404
+
+
+@app.route("/api/bridges/<bridge_id>/llm/providers")
+def api_bridge_llm_providers(bridge_id):
+    """返回可选 LLM 供应商（前端只需填 API Key）。"""
+    auth = _require_token()
+    if auth:
+        return auth
+    return jsonify({"providers": LLM_PROVIDERS})
+
+
+@app.route("/api/bridges/<bridge_id>/llm/test", methods=["POST"])
+def api_bridge_llm_test(bridge_id):
+    """用当前配置（可临时覆盖 api_key/provider/model）测试 LLM 连通性。"""
+    auth = _require_token()
+    if auth:
+        return auth
+    cfg = _config_for(bridge_id)
+    if not cfg or "error" in cfg:
+        return jsonify({"error": "配置不可用"}), 404
+    data = request.get_json(silent=True) or {}
+    llm_cfg = dict(cfg.get("llm") or {})
+    if data.get("provider") in LLM_PROVIDERS:
+        llm_cfg["provider"] = data["provider"]
+        llm_cfg["api_base"] = LLM_PROVIDERS[data["provider"]]["api_base"]
+    if data.get("api_key"):
+        llm_cfg["api_key"] = str(data["api_key"]).strip()
+    if data.get("model"):
+        llm_cfg["model"] = str(data["model"]).strip()
+    elif not llm_cfg.get("model") and llm_cfg.get("provider") in LLM_PROVIDERS:
+        llm_cfg["model"] = LLM_PROVIDERS[llm_cfg["provider"]]["model"]
+    from report_agent.llm_classifier import LLMClassifier
+    cls = LLMClassifier(llm_cfg)
+    if not cls.available():
+        return jsonify({"ok": False,
+                        "error": "未配置 API Key 或供应商地址（请先保存配置）"})
+    try:
+        resp = cls._chat([{"role": "user", "content": "只回复 OK 两个字"}])
+        ok = bool(resp and str(resp).strip())
+        return jsonify({"ok": ok, "reply": str(resp or "").strip()[:100]})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)})
 
 
 @app.route("/api/bridges/<bridge_id>/log")

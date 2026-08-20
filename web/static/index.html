@@ -224,6 +224,22 @@
 
       <h3 style="font-size:14px">报告命名 / 其他</h3>
       <div class="field"><label>文件名前缀</label><input id="cfgNamePrefix" placeholder="如 赤石大桥"></div>
+
+      <h3 style="font-size:14px">大模型（LLM 审查 / 识别）</h3>
+      <div class="field"><label>模型供应商</label>
+        <select id="cfgLlmProvider">
+          <option value="">请选择供应商</option>
+        </select>
+      </div>
+      <div class="field"><label>API Key</label>
+        <input type="password" id="cfgLlmKey" placeholder="填供应商 API Key（只写入本机配置，接口返回时打码）">
+      </div>
+      <div class="field"><label>模型名称</label><input id="cfgLlmModel" placeholder="选供应商后自动带出，可改"></div>
+      <div class="row">
+        <button class="ghost" onclick="testLlm()">测试连接</button>
+        <span id="llmTestResult" class="muted"></span>
+      </div>
+
       <div class="row"><button onclick="saveConfig()">保存配置</button></div>
     </div>
   </section>
@@ -658,8 +674,66 @@ function loadConfig() {
     $("cfgNameDict").value = bd.name_dict || "";
     $("cfgTemplate").value = c.template || "";
     $("cfgNamePrefix").value = (c.report || {}).name_prefix || "";
+    var llm = c.llm || {};
+    $("cfgLlmProvider").value = llm.provider || "";
+    $("cfgLlmModel").value = llm.model || "";
+    $("cfgLlmKey").value = "";
+    loadLlmProviders(llm.provider || "");
     showMsg("配置已加载", "ok");
   }).catch(function (e) { showMsg(String(e), "err"); });
+}
+
+function loadLlmProviders(current) {
+  var bridgeId = $("cfgBridge").value;
+  if (!bridgeId) return;
+  api("/api/bridges/" + bridgeId + "/llm/providers").then(function (r) {
+    var sel = $("cfgLlmProvider");
+    var old = sel.value;
+    sel.innerHTML = '<option value="">请选择供应商</option>';
+    Object.keys(r.providers || {}).forEach(function (k) {
+      var p = r.providers[k];
+      var opt = document.createElement("option");
+      opt.value = k;
+      opt.textContent = p.label + "（" + p.model + "）";
+      sel.appendChild(opt);
+    });
+    sel.value = current || old;
+    if (sel.value) applyLlmProvider(sel.value);
+  }).catch(function () {});
+}
+
+function applyLlmProvider(prov) {
+  var bridgeId = $("cfgBridge").value;
+  if (!prov || !bridgeId) return;
+  api("/api/bridges/" + bridgeId + "/llm/providers").then(function (r) {
+    var p = (r.providers || {})[prov];
+    if (p) $("cfgLlmModel").value = p.model;
+  }).catch(function () {});
+}
+$("cfgLlmProvider").addEventListener("change", function () {
+  applyLlmProvider($("cfgLlmProvider").value);
+});
+
+function testLlm() {
+  var bridgeId = $("cfgBridge").value;
+  if (!bridgeId) return;
+  $("llmTestResult").textContent = "测试中…";
+  api("/api/bridges/" + bridgeId + "/llm/test", {
+    method: "POST",
+    body: JSON.stringify({
+      provider: $("cfgLlmProvider").value,
+      api_key: $("cfgLlmKey").value.trim(),
+      model: $("cfgLlmModel").value.trim()
+    })
+  }).then(function (r) {
+    $("llmTestResult").textContent = r.ok
+      ? "连接成功：模型回复 " + esc(r.reply || "OK")
+      : "连接失败：" + esc(r.error || "未知错误");
+    $("llmTestResult").className = "muted " + (r.ok ? "green" : "red");
+  }).catch(function (e) {
+    $("llmTestResult").textContent = "连接失败：" + String(e);
+    $("llmTestResult").className = "muted red";
+  });
 }
 
 function testDataPaths() {
@@ -692,7 +766,13 @@ function saveConfig() {
       sensor_map: $("cfgSensorMap").value.trim(),
       name_dict: $("cfgNameDict").value.trim()
     },
-    report: { name_prefix: $("cfgNamePrefix").value.trim() }
+    report: { name_prefix: $("cfgNamePrefix").value.trim() },
+    llm: {
+      provider: $("cfgLlmProvider").value,
+      api_key: $("cfgLlmKey").value.trim(),
+      model: $("cfgLlmModel").value.trim(),
+      enabled: true
+    }
   };
   api("/api/bridges/" + bridgeId + "/config", { method: "POST", body: JSON.stringify(body) })
     .then(function () { showMsg("配置已保存", "ok"); })

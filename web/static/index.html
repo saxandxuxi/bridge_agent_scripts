@@ -349,7 +349,7 @@ function showTab(name) {
   if (name === "download") { fillBridgeSelect("dlBridge"); loadReports(); }
   if (name === "upload") { fillBridgeSelect("srBridge"); resetUploadPanel(); }
   if (name === "preprocess") loadPreprocessConfig();
-  if (name === "config") fillBridgeSelect("cfgBridge");
+  if (name === "config") { fillBridgeSelect("cfgBridge"); loadConfig(); }
   if (name === "scheduler") { fillBridgeSelect("schBridge"); loadScheduler(); }
   if (name === "review") { fillBridgeSelect("revBridge"); loadReview(); }
   if (name === "log") fillBridgeSelect("logBridge");
@@ -699,7 +699,7 @@ function loadLlmProviders(current) {
     });
     sel.value = current || old;
     if (sel.value) applyLlmProvider(sel.value);
-  }).catch(function () {});
+  }).catch(function (e) { showMsg("加载 LLM 供应商失败：" + String(e), "err"); });
 }
 
 function applyLlmProvider(prov) {

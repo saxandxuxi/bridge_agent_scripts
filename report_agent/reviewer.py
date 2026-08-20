@@ -119,6 +119,68 @@ class ReportReviewer:
             result["ok"] = True  # 解析失败视为无结论，不阻塞
         return result
 
+    # ------------------------------------------------------------------
+    # 第二轮：报告审查
+    # ------------------------------------------------------------------
+    def review_report(self, source_text: str, report_text: str,
+                      lineage_digest: str = "",
+                      table_warnings: str = "") -> Dict:
+        """审查生成的报告，返回 {"ok", "issues", "raw"}。"""
+        result = {"ok": True, "issues": [], "raw": ""}
+        if not self.available():
+            log.info("LLM 不可用，跳过报告审查")
+            return result
+        if not report_text.strip():
+            log.info("报告文本为空，跳过报告审查")
+            return result
+        system = (
+            "你是桥梁健康监测报告质量审查专家。对照成品报告原文，审查“生成的报告”"
+            "是否存在错误，只输出 JSON：{\"issues\": [{\"type\": \"...\", "
+            "\"detail\": \"...\"}]}，没有问题输出 {\"issues\": []}。\n"
+            "重点审查：\n"
+            "1) 表格：是否有重复的列或重复的行；单元格数值是否张冠李戴（如右幅行填了"
+            "左幅数据）。type=table_duplicate 或 index_wrong。\n"
+            "2) 图片：图注/章节是否左右幅、上下游、位置错配；同一张图是否被重复插入。"
+            "type=image_wrong。\n"
+            "3) 统计逻辑：湿度等百分数不应超过 100（如 112% 一定错）；温度/应变等"
+            "不应出现明显反物理的值；表格里“最大值”必须不小于“最小值”，“平均值”必须"
+            "落在 [最小值, 最大值] 闭区间内；“差值/极差”应为非负。type=stat_logic。\n"
+            "4) 单位：数值单位是否写错（如 m/s² 落在句号外、%与℃混用）。type=unit_wrong。\n"
+            "5) 单位空格：数值和单位之间不能有多余空格（如“5.5  m/s²”“6.9m/s² ”）。"
+            "type=unit_wrong。\n"
+            "6) 总结段落：结论里的统计值是否和报告正文/表格不一致；是否照抄成品报告"
+            "里的旧数值(应从数据重算，不能直接回填原文)；是否在同一句里把“最高/最低”"
+            "极值重复输出两遍且数值口径不一致(如先写最高43.3℃、后面又写最高43.2758℃)。"
+            "type=summary_stale。\n"
+            "7) 极值来源：若某个极值来自恒 0/故障测点(如结构温度最低 0℃)，正文必须"
+            "明确标注是传感器故障，且“对应测点位置”要和“故障位置”前后一致。"
+            "type=summary_stale。\n"
+            "8) 多方向位置：GNSS 的 X/Y/Z 三方向“对应测点”必须各自正确，"
+            "不能出现 Z 方向复用 Y 方向位置。type=index_wrong。\n"
+            "9) 报告期：标题/页眉/正文的季度或年份是否和声明报告期一致。"
+            "type=period_mismatch。\n"
+            "type 取值：table_duplicate / index_wrong / image_wrong / stat_logic / "
+            "unit_wrong / summary_stale / period_mismatch / other。"
+            "detail 用简短中文说明具体位置和问题，能引用数值就引用。"
+        )
+        user = (
+            "【成品报告原文】\n" + (source_text or "（无）")[:30000]
+            + "\n\n【生成的报告】\n" + report_text[:40000]
+            + ("\n\n【数据链路摘要（未找到/回退项）】\n" + lineage_digest
+               if lineage_digest else "")
+            + ("\n\n【规则式填表校验告警】\n" + table_warnings
+               if table_warnings else "")
+        )
+        data = self._ask_json(system, user)
+        result["raw"] = json.dumps(data, ensure_ascii=False) if data else ""
+        if isinstance(data, dict):
+            issues = data.get("issues") or []
+            result["issues"] = [i for i in issues if isinstance(i, dict)]
+            result["ok"] = not result["issues"]
+        else:
+            result["ok"] = True
+        return result
+
 
 _UNIT_RE = re.compile(r"(m/s²|m/s2|℃|%|με|mm|kN|mm/s²)")
 _NUM_RE = re.compile(r"-?\d+(?:\.\d+)?")
@@ -198,65 +260,3 @@ def self_check_report(path: str) -> List[Dict]:
             issues.append({"type": "unit_wrong",
                            "detail": f"数值与单位之间有多余空格 | {t[:50]}"})
     return issues
-
-    # ------------------------------------------------------------------
-    # 第二轮：报告审查
-    # ------------------------------------------------------------------
-    def review_report(self, source_text: str, report_text: str,
-                      lineage_digest: str = "",
-                      table_warnings: str = "") -> Dict:
-        """审查生成的报告，返回 {"ok", "issues", "raw"}。"""
-        result = {"ok": True, "issues": [], "raw": ""}
-        if not self.available():
-            log.info("LLM 不可用，跳过报告审查")
-            return result
-        if not report_text.strip():
-            log.info("报告文本为空，跳过报告审查")
-            return result
-        system = (
-            "你是桥梁健康监测报告质量审查专家。对照成品报告原文，审查“生成的报告”"
-            "是否存在错误，只输出 JSON：{\"issues\": [{\"type\": \"...\", "
-            "\"detail\": \"...\"}]}，没有问题输出 {\"issues\": []}。\n"
-            "重点审查：\n"
-            "1) 表格：是否有重复的列或重复的行；单元格数值是否张冠李戴（如右幅行填了"
-            "左幅数据）。type=table_duplicate 或 index_wrong。\n"
-            "2) 图片：图注/章节是否左右幅、上下游、位置错配；同一张图是否被重复插入。"
-            "type=image_wrong。\n"
-            "3) 统计逻辑：湿度等百分数不应超过 100（如 112% 一定错）；温度/应变等"
-            "不应出现明显反物理的值；表格里“最大值”必须不小于“最小值”，“平均值”必须"
-            "落在 [最小值, 最大值] 闭区间内；“差值/极差”应为非负。type=stat_logic。\n"
-            "4) 单位：数值单位是否写错（如 m/s² 落在句号外、%与℃混用）。type=unit_wrong。\n"
-            "5) 单位空格：数值和单位之间不能有多余空格（如“5.5  m/s²”“6.9m/s² ”）。"
-            "type=unit_wrong。\n"
-            "6) 总结段落：结论里的统计值是否和报告正文/表格不一致；是否照抄成品报告"
-            "里的旧数值(应从数据重算，不能直接回填原文)；是否在同一句里把“最高/最低”"
-            "极值重复输出两遍且数值口径不一致(如先写最高43.3℃、后面又写最高43.2758℃)。"
-            "type=summary_stale。\n"
-            "7) 极值来源：若某个极值来自恒 0/故障测点(如结构温度最低 0℃)，正文必须"
-            "明确标注是传感器故障，且“对应测点位置”要和“故障位置”前后一致。"
-            "type=summary_stale。\n"
-            "8) 多方向位置：GNSS 的 X/Y/Z 三方向“对应测点”必须各自正确，"
-            "不能出现 Z 方向复用 Y 方向位置。type=index_wrong。\n"
-            "9) 报告期：标题/页眉/正文的季度或年份是否和声明报告期一致。"
-            "type=period_mismatch。\n"
-            "type 取值：table_duplicate / index_wrong / image_wrong / stat_logic / "
-            "unit_wrong / summary_stale / period_mismatch / other。"
-            "detail 用简短中文说明具体位置和问题，能引用数值就引用。"
-        )
-        user = (
-            "【成品报告原文】\n" + (source_text or "（无）")[:30000]
-            + "\n\n【生成的报告】\n" + report_text[:40000]
-            + ("\n\n【数据链路摘要（未找到/回退项）】\n" + lineage_digest
-               if lineage_digest else "")
-            + ("\n\n【规则式填表校验告警】\n" + table_warnings
-               if table_warnings else "")
-        )
-        data = self._ask_json(system, user)
-        result["raw"] = json.dumps(data, ensure_ascii=False) if data else ""
-        if isinstance(data, dict):
-            issues = data.get("issues") or []
-            result["issues"] = [i for i in issues if isinstance(i, dict)]
-            result["ok"] = not result["issues"]
-        else:
-            result["ok"] = True
-        return result

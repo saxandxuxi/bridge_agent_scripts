@@ -10,3 +10,7 @@ preprocess/统计值_*/
 preprocess/日级数据/
 .idea/
 .workbuddy/
+
+.agents/
+skills-lock.json
+

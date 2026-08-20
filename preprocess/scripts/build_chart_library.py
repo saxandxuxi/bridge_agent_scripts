@@ -3419,9 +3419,17 @@ def main():
                     actual_feats = sensor_feats.get(str(sensor))
                     if actual_feats:
                         for af in actual_feats:
-                            groups[feature_group(af)].append((sensor, af))
+                            pair = (sensor, af)
+                            gk = feature_group(af)
+                            if pair not in groups[gk]:
+                                # 同一传感器多特征时会重复进入本循环，去重，
+                                # 避免合并图出现两个相同测点(如 431 出现两次)
+                                groups[gk].append(pair)
                     else:
-                        groups[feature_group(feat)].append((sensor, feat))
+                        pair = (sensor, feat)
+                        gk = feature_group(feat)
+                        if pair not in groups[gk]:
+                            groups[gk].append(pair)
                 pos_series = []   # 位置内全部特征序列（用于跨特征相关性散点图）
                 for g, gf_pairs in sorted(groups.items()):
                     uniq_sensors = {s for s, _ in gf_pairs}

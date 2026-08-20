@@ -38,6 +38,14 @@ from typing import Dict, List, Optional
 
 from report_agent.config import resolve_bridge_subdir
 
+# 方位词（长的在前，避免“上游侧”被“上游”先吃掉）
+_SIDE_RE = re.compile(r"(上游侧|下游侧|左幅|右幅|左侧|右侧|上游|下游)")
+
+
+def _side_set(s: str) -> set:
+    return set(_SIDE_RE.findall(str(s or "")))
+
+
 log = logging.getLogger("report-agent.bridge")
 
 
@@ -508,10 +516,26 @@ class BridgeData:
         if not entries:
             # 兼容全角/半角数字等写法差异（如 “6号” vs “六号”）
             merged = []
+            key_sides = _side_set(key)
             for k, v in self.name_dict.items():
                 kn = _norm(k)
-                # 精确/包含匹配；“4#墩墩顶主梁梁端”是“…左侧/右侧”的前缀时合并两侧
-                if kn == key or (len(key) >= 2 and key in kn) or (len(kn) >= 2 and kn in key):
+                ok = (kn == key
+                      or (len(key) >= 2 and key in kn)
+                      or (len(kn) >= 2 and kn in key))
+                if not ok and key_sides:
+                    # 方位词顺序不同（如 跨中1/2截面左幅 vs 跨中左幅1/2截面）：
+                    # 去掉方位词后相同、且双方方位一致才匹配
+                    skey = _SIDE_RE.sub("", key)
+                    skn = _SIDE_RE.sub("", kn)
+                    if (skey and skn and skey == skn
+                            and _side_set(kn) == key_sides):
+                        ok = True
+                if ok and key_sides:
+                    # 位置带方位时，候选键必须带相同方位
+                    # （排除 跨中1/2截面 这类无方位键被子串误匹配）
+                    if _side_set(kn) != key_sides:
+                        ok = False
+                if ok:
                     merged.extend(v)
             if merged:
                 entries = merged

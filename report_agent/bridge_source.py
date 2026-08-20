@@ -512,33 +512,37 @@ class BridgeData:
         避免同一位置混装多种传感器时取错（如 5#塔梁交接处主梁 同时有结构温度/应变/挠度）。
         """
         key = _norm(pos)
-        entries = self.name_dict.get(key) or []
-        if not entries:
-            # 兼容全角/半角数字等写法差异（如 “6号” vs “六号”）
-            merged = []
-            key_sides = _side_set(key)
-            for k, v in self.name_dict.items():
-                kn = _norm(k)
-                ok = (kn == key
-                      or (len(key) >= 2 and key in kn)
-                      or (len(kn) >= 2 and kn in key))
-                if not ok and key_sides:
-                    # 方位词顺序不同（如 跨中1/2截面左幅 vs 跨中左幅1/2截面）：
-                    # 去掉方位词后相同、且双方方位一致才匹配
-                    skey = _SIDE_RE.sub("", key)
-                    skn = _SIDE_RE.sub("", kn)
-                    if (skey and skn and skey == skn
-                            and _side_set(kn) == key_sides):
-                        ok = True
-                if ok and key_sides:
-                    # 位置带方位时，候选键必须带相同方位
-                    # （排除 跨中1/2截面 这类无方位键被子串误匹配）
-                    if _side_set(kn) != key_sides:
-                        ok = False
-                if ok:
-                    merged.extend(v)
-            if merged:
-                entries = merged
+        key_sides = _side_set(key)
+        # 精确键 + 模糊/方位顺序无关的候选键合并（按编号去重），
+        # 再统一按特征过滤。这样“跨中1/2截面左幅”即使精确命中的是挠度，
+        # 也能补进温度传感器“跨中左幅1/2截面”。
+        entries = list(self.name_dict.get(key) or [])
+        seen_ids = {str(e.get("编号", "")) for e in entries if e.get("编号")}
+        for k, v in self.name_dict.items():
+            kn = _norm(k)
+            ok = (kn == key
+                  or (len(key) >= 2 and key in kn)
+                  or (len(kn) >= 2 and kn in key))
+            if not ok and key_sides:
+                # 方位词顺序不同（如 跨中1/2截面左幅 vs 跨中左幅1/2截面）：
+                # 去掉方位词后相同、且双方方位一致才匹配
+                skey = _SIDE_RE.sub("", key)
+                skn = _SIDE_RE.sub("", kn)
+                if (skey and skn and skey == skn
+                        and _side_set(kn) == key_sides):
+                    ok = True
+            if ok and key_sides:
+                # 位置带方位时，候选键必须带相同方位
+                # （排除 跨中1/2截面 这类无方位键被子串误匹配）
+                if _side_set(kn) != key_sides:
+                    ok = False
+            if not ok:
+                continue
+            for e in v or []:
+                sid = str(e.get("编号", ""))
+                if sid and sid not in seen_ids:
+                    seen_ids.add(sid)
+                    entries.append(e)
         feat = self.metrics.get(metric, {}).get("feature", "")
         cat = self.metric_category.get(metric, "")
         sids = []

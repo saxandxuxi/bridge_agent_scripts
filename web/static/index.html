@@ -675,10 +675,11 @@ function loadConfig() {
     $("cfgTemplate").value = c.template || "";
     $("cfgNamePrefix").value = (c.report || {}).name_prefix || "";
     var llm = c.llm || {};
+    $("cfgLlmKey").value = "";
     $("cfgLlmProvider").value = llm.provider || "";
     $("cfgLlmModel").value = llm.model || "";
-    $("cfgLlmKey").value = "";
     loadLlmProviders(llm.provider || "");
+    if (llm.provider && !llm.model) applyLlmProvider(llm.provider);
     showMsg("配置已加载", "ok");
   }).catch(function (e) { showMsg(String(e), "err"); });
 }
@@ -701,7 +702,6 @@ function loadLlmProviders(current) {
     sel.appendChild(opt);
   });
   if (current) sel.value = current;
-  if (sel.value) applyLlmProvider(sel.value);
 }
 
 function applyLlmProvider(prov) {
@@ -724,12 +724,19 @@ function testLlm() {
       model: $("cfgLlmModel").value.trim()
     })
   }).then(function (r) {
-    $("llmTestResult").textContent = r.ok
-      ? "连接成功：模型回复 " + esc(r.reply || "OK")
-      : "连接失败：" + esc(r.error || "未知错误");
-    $("llmTestResult").className = "muted " + (r.ok ? "green" : "red");
+    if (r && r.ok) {
+      $("llmTestResult").textContent = "连接成功：模型回复 " + esc(r.reply || "OK");
+      $("llmTestResult").className = "muted green";
+    } else if (r && r.error) {
+      $("llmTestResult").textContent = "连接失败：" + esc(r.error);
+      $("llmTestResult").className = "muted red";
+    } else {
+      $("llmTestResult").textContent =
+        "服务器返回异常（多半是 web/app.py 版本过旧、缺少 llm/test 接口，请同步并重启 web）";
+      $("llmTestResult").className = "muted red";
+    }
   }).catch(function (e) {
-    $("llmTestResult").textContent = "连接失败：" + String(e);
+    $("llmTestResult").textContent = "连接失败：" + String((e && e.message) || e);
     $("llmTestResult").className = "muted red";
   });
 }
@@ -757,6 +764,13 @@ function testDataPaths() {
 function saveConfig() {
   var bridgeId = $("cfgBridge").value;
   if (!bridgeId) return;
+  var _llm = {
+    provider: $("cfgLlmProvider").value,
+    model: $("cfgLlmModel").value.trim(),
+    enabled: true
+  };
+  var _k = $("cfgLlmKey").value.trim();
+  if (_k) _llm.api_key = _k;   // 只有填了才写，避免空框覆盖已保存的 Key
   var body = {
     paths: {
       stats_dir: $("cfgStatsDir").value.trim(),
@@ -765,12 +779,7 @@ function saveConfig() {
       name_dict: $("cfgNameDict").value.trim()
     },
     report: { name_prefix: $("cfgNamePrefix").value.trim() },
-    llm: {
-      provider: $("cfgLlmProvider").value,
-      api_key: $("cfgLlmKey").value.trim(),
-      model: $("cfgLlmModel").value.trim(),
-      enabled: true
-    }
+    llm: _llm
   };
   api("/api/bridges/" + bridgeId + "/config", { method: "POST", body: JSON.stringify(body) })
     .then(function () { showMsg("配置已保存", "ok"); })

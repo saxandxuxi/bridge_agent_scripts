@@ -1138,7 +1138,8 @@ def _collapse_extra_spaces(doc) -> int:
     for tb in doc.tables:
         for row in tb.rows:
             for cell in row.cells:
-                for pa in _walk_paragraphs(cell):
+                # _Cell 没有 .sections，直接用它自己的 .paragraphs
+                for pa in getattr(cell, "paragraphs", []) or []:
                     _fix_para(pa)
     if fixed:
         log.info("收尾修补：%d 处多余连续空格已归一", fixed)

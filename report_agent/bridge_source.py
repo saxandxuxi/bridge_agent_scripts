@@ -38,12 +38,24 @@ from typing import Dict, List, Optional
 
 from report_agent.config import resolve_bridge_subdir
 
-# 方位词（长的在前，避免“上游侧”被“上游”先吃掉）
-_SIDE_RE = re.compile(r"(上游侧|下游侧|左幅|右幅|左侧|右侧|上游|下游)")
+# 方位词（长的在前，避免“上游侧”被“上游”先吃掉；含裸“左/右”前缀，
+# 统一规范成 L/R/U/D，使“左跨中1/2截面”≈“跨中左幅1/2截面”）
+_SIDE_RE = re.compile(r"(上游侧|下游侧|左幅|右幅|左侧|右侧|上游|下游|左|右)")
 
 
 def _side_set(s: str) -> set:
-    return set(_SIDE_RE.findall(str(s or "")))
+    """返回位置名里的方位码集合：左类=L、右类=R、上游=U、下游=D。"""
+    codes = set()
+    for tok in _SIDE_RE.findall(str(s or "")):
+        if tok in ("左", "左幅", "左侧"):
+            codes.add("L")
+        elif tok in ("右", "右幅", "右侧"):
+            codes.add("R")
+        elif tok in ("上游", "上游侧"):
+            codes.add("U")
+        elif tok in ("下游", "下游侧"):
+            codes.add("D")
+    return codes
 
 
 log = logging.getLogger("report-agent.bridge")

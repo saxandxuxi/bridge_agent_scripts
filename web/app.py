@@ -1537,6 +1537,8 @@ def api_bridge_llm_test(bridge_id):
         return jsonify({"error": "配置不可用"}), 404
     data = request.get_json(silent=True) or {}
     llm_cfg = dict(cfg.get("llm") or {})
+    # 测试只验证“填的 Key + 供应商”，不依赖配置里 enabled 开关
+    llm_cfg["enabled"] = True
     if data.get("provider") in LLM_PROVIDERS:
         llm_cfg["provider"] = data["provider"]
         llm_cfg["api_base"] = LLM_PROVIDERS[data["provider"]]["api_base"]

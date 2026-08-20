@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import sys
+from typing import Dict, Optional
 
 
 log = logging.getLogger("setup-bridge")
@@ -177,22 +178,28 @@ def _latest_template(bridge_name: str) -> str:
     return "templates/" + best
 
 
-def build_config(bridge_name: str, input_path: str) -> dict:
+def build_config(bridge_name: str, input_path: str = "",
+                 overrides: Optional[dict] = None) -> dict:
+    """生成桥配置文件。overrides 可覆盖：
+    stats_dir/charts_dir/sensor_map/name_dict/template/source_report/
+    name_prefix/llm(provider,api_key,model)/schedule(mode,start_date)。
+    """
     assets = find_bridge_assets(bridge_name)
     bid = _bridge_id(bridge_name)
     rel = lambda p: os.path.relpath(p, BASE).replace("\\", "/") if p else ""
-    return {
-        "template": _latest_template(bridge_name),
+    ov = overrides or {}
+    cfg = {
+        "template": ov.get("template") or _latest_template(bridge_name),
         "output_dir": ".\\outputs\\reports",
-        "source_report": rel(os.path.abspath(input_path)),
+        "source_report": rel(os.path.abspath(input_path)) if input_path else "",
         "bridge_data": {
             "enabled": True,
             "bridge_name": bridge_name,
-            "stats_dir": rel(assets["stats_dir"]),
-            "charts_dir": rel(assets["charts_dir"]),
-            "sensor_map": rel(assets["sensor_map"]),
-            "overview": os.path.join(rel(assets["stats_dir"]), "总览.json") if assets["stats_dir"] else "",
-            "name_dict": rel(assets["name_dict"]),
+            "stats_dir": rel(ov.get("stats_dir") or assets["stats_dir"]),
+            "charts_dir": rel(ov.get("charts_dir") or assets["charts_dir"]),
+            "sensor_map": rel(ov.get("sensor_map") or assets["sensor_map"]),
+            "overview": "",
+            "name_dict": rel(ov.get("name_dict") or assets["name_dict"]),
             "fuzzy_threshold": 0.7,
             "period_aggregate": True,
             "auto_fill_missing_charts": True,
@@ -202,12 +209,16 @@ def build_config(bridge_name: str, input_path: str) -> dict:
             "sensor_aliases": {},
             "chart_map": {},
         },
-        "report": {"name_prefix": bridge_name, "with_timestamp": False},
+        "report": {"name_prefix": ov.get("name_prefix") or bridge_name,
+                   "with_timestamp": False},
         "llm": {
             "enabled": True,
-            "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            "api_key": "",
-            "model": "qwen-plus",
+            "api_base": (ov.get("llm") or {}).get(
+                "api_base",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+            "api_key": (ov.get("llm") or {}).get("api_key", ""),
+            "model": (ov.get("llm") or {}).get("model", "qwen-plus"),
+            "provider": (ov.get("llm") or {}).get("provider", "qwen"),
             "review_low": 0.38,
             "review_high": 0.68,
             "timeout": 300,
@@ -215,10 +226,16 @@ def build_config(bridge_name: str, input_path: str) -> dict:
         },
         "charts": {"engine": "python", "output_dir": "outputs\\charts",
                    "width_inches": 5.8, "definitions": [], "matlab": {}},
-        "schedule": {"mode": "quarterly", "weekday": 1, "day_of_month": 1,
+        "schedule": {"mode": (ov.get("schedule") or {}).get("mode", "quarterly"),
+                     "start_date": (ov.get("schedule") or {}).get("start_date", ""),
+                     "weekday": 1, "day_of_month": 1,
                      "hour": 8, "minute": 0, "use_apscheduler": True},
         "period": {"weekly_days": 7, "monthly_days": 30},
     }
+    stats_dir = cfg["bridge_data"]["stats_dir"]
+    cfg["bridge_data"]["overview"] = (
+        os.path.join(stats_dir, "总览.json") if stats_dir else "")
+    return cfg
 
 
 def register_bridge(bid: str, bridge_name: str, config_path: str) -> None:

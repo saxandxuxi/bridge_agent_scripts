@@ -71,6 +71,15 @@
   .pv-doc p.needs-human { background: #fff7d6; border-left: 4px solid #f59e0b; padding-left: 8px; cursor: help; }
   .issue-item { background: var(--card2); border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin-bottom: 8px; font-size: 12px; }
   .issue-item .t { color: var(--warn); font-weight: 600; }
+  .bridge-bar { display: flex; align-items: center; gap: 10px; padding: 8px 22px; border-bottom: 1px solid var(--line); background: var(--card2); flex-wrap: wrap; }
+  .bridge-bar .bar-label { color: var(--dim); font-size: 13px; }
+  .reg-mask { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; z-index: 60; }
+  .reg-mask.show { display: flex; }
+  .reg-modal { background: var(--card); border: 1px solid var(--line); border-radius: 12px; width: min(720px, 96vw); max-height: 92vh; margin: auto; overflow: auto; padding: 16px 20px; }
+  .reg-modal h3 { margin: 10px 0 8px; font-size: 15px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+  .reg-modal .field { grid-template-columns: 170px 1fr; }
+  .cur-card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .cur-card h2 { font-size: 18px; margin-bottom: 10px; }
 </style>
 </head>
 <body>
@@ -84,6 +93,17 @@
     <button class="ghost" onclick="saveToken()">保存</button>
   </div>
 </header>
+<div class="bridge-bar">
+  <span class="bar-label">桥梁</span>
+  <select id="curMode" onchange="onBridgeModeChange()">
+    <option value="existing">已有桥</option>
+    <option value="new">新桥注册</option>
+  </select>
+  <select id="curBridge" onchange="onBridgeSwitch()"></select>
+  <span id="curBridgeName" class="muted"></span>
+  <span class="spacer"></span>
+  <span id="curBridgeStatus" class="badge"></span>
+</div>
 <nav>
   <button class="active" data-tab="overview" onclick="showTab('overview')">总览</button>
   <button data-tab="run" onclick="showTab('run')">生成报告</button>
@@ -98,13 +118,12 @@
 <main>
   <div class="msg" id="msg"></div>
 
-  <section id="tab-overview"><div class="cards" id="bridgeCards"></div></section>
+  <section id="tab-overview"><div id="currentBridgeCard"></div></section>
 
   <section id="tab-run" style="display:none">
     <div class="panel">
       <h3>手动生成报告</h3>
       <div class="row">
-        <select id="runBridge" style="min-width:180px"></select>
         <select id="runTemplate" style="min-width:220px">
           <option value="">默认模板（当前配置）</option>
         </select>
@@ -140,7 +159,7 @@
   <section id="tab-download" style="display:none">
     <div class="panel">
       <h3>已生成报告</h3>
-      <div class="row"><select id="dlBridge"></select><button class="ghost" onclick="loadReports()">刷新</button></div>
+      <div class="row"><button class="ghost" onclick="loadReports()">刷新</button></div>
       <table id="reportTable"><thead><tr><th>文件名</th><th>大小</th><th>生成时间</th><th></th></tr></thead><tbody></tbody></table>
     </div>
   </section>
@@ -148,17 +167,7 @@
   <section id="tab-upload" style="display:none">
     <div class="panel">
       <h3>上传成品报告（.docx）</h3>
-      <div class="row">
-        <select id="srBridge" style="min-width:180px"></select>
-        <select id="srTarget">
-          <option value="same">已有桥</option>
-          <option value="new">新桥</option>
-        </select>
-        <span id="srNewFields" style="display:none">
-          <input type="text" id="srNewId" placeholder="新桥ID（如 xinhe）" style="width:140px">
-          <input type="text" id="srNewName" placeholder="新桥名称（如 新河特大桥）" style="width:170px">
-        </span>
-      </div>
+      <p class="muted" id="srBridgeHint">上传到当前桥</p>
       <div class="row">
         <input type="file" id="srFile" accept=".docx">
         <button onclick="uploadSourceReport()">上传成品报告</button>
@@ -217,7 +226,7 @@
   <section id="tab-config" style="display:none">
     <div class="panel">
       <h3>配置管理</h3>
-      <div class="row"><select id="cfgBridge"></select><button class="ghost" onclick="loadConfig()">加载配置</button></div>
+      <div class="row"><button class="ghost" onclick="loadConfig()">加载配置</button></div>
 
       <h3 style="font-size:14px">数据存放路径</h3>
       <div class="field"><label>统计值目录</label><input id="cfgStatsDir" placeholder="如 D:/bridge/统计值"></div>
@@ -261,7 +270,7 @@
   <section id="tab-scheduler" style="display:none">
     <div class="panel">
       <h3>定时调度器</h3>
-      <div class="row"><select id="schBridge"></select><button class="ghost" onclick="loadScheduler()">刷新状态</button></div>
+      <div class="row"><button class="ghost" onclick="loadScheduler()">刷新状态</button></div>
       <div id="schStatus" class="muted"></div>
       <h3 style="font-size:14px">调度设置</h3>
       <div class="field"><label>周期</label>
@@ -288,7 +297,6 @@
     <div class="panel">
       <h3>审查问题</h3>
       <div class="row">
-        <select id="revBridge"></select>
         <button class="ghost" onclick="loadReview()">刷新</button>
       </div>
       <div id="revBody">—</div>
@@ -299,7 +307,6 @@
     <div class="panel">
       <h3>运行日志</h3>
       <div class="row">
-        <select id="logBridge"></select>
         <select id="logName">
           <option value="agent">agent.log</option>
           <option value="scheduler">scheduler.log</option>
@@ -313,9 +320,60 @@
   </section>
 </main>
 
+<div id="regMask" class="reg-mask">
+  <div class="reg-modal">
+    <h2>新桥注册</h2>
+    <p class="muted">提交后自动生成 <code>config/config_&lt;id&gt;.json</code>、登记到本机
+      <code>bridges/registry.json</code>，并切换为当前桥。</p>
+    <h3>桥信息</h3>
+    <div class="field"><label style="color:var(--bad)">桥名 *</label>
+      <input id="regName" placeholder="如 洣水河特大桥（自动生成拼音 ID）"></div>
+    <h3>数据路径</h3>
+    <div class="field"><label>原始秒级数据目录</label>
+      <input id="regRaw" placeholder="绝对路径，如 E:/信科采集软件解析数据"></div>
+    <div class="field"><label>日级数据目录</label>
+      <input id="regDaily" placeholder="绝对路径，如 E:/preprocess_sensor_data"></div>
+    <div class="field"><label>图库目录（可留空自动生成）</label>
+      <input id="regCharts" placeholder="留空=按桥名自动生成 preprocess/图库_&lt;期&gt;/&lt;桥名&gt;"></div>
+    <div class="field"><label>统计值目录（可留空自动生成）</label>
+      <input id="regStats" placeholder="留空=按桥名自动生成 preprocess/统计值_&lt;期&gt;/&lt;桥名&gt;"></div>
+    <h3>文件上传（可选）</h3>
+    <div class="field"><label>传感器测点编号表格</label>
+      <input type="file" id="regMapDocx" accept=".docx"></div>
+    <div class="field"><label>成品报告</label>
+      <input type="file" id="regSourceReport" accept=".docx"></div>
+    <div class="field"><label>模板（或选已有）</label>
+      <div class="row" style="margin:0"><input type="file" id="regTemplateFile" accept=".docx" style="flex:1">
+        <select id="regTemplate" style="flex:1"></select></div>
+    </div>
+    <h3>大模型（可选）</h3>
+    <div class="field"><label>供应商</label>
+      <select id="regLlmProvider">
+        <option value="">请选择供应商</option>
+      </select></div>
+    <div class="field"><label>API Key</label>
+      <input type="password" id="regLlmKey" placeholder="供应商 API Key"></div>
+    <div class="field"><label>模型名称</label>
+      <input id="regLlmModel" placeholder="选供应商后自动带出，可改"></div>
+    <h3>调度（可选）</h3>
+    <div class="field"><label>周期模式</label>
+      <select id="regScheduleMode">
+        <option value="quarterly">每季度（季度过完）</option>
+        <option value="yearly">每年（1月）</option>
+      </select></div>
+    <div class="field"><label>起始日期</label>
+      <input type="date" id="regScheduleStart"></div>
+    <div class="row">
+      <button onclick="submitRegister()">提交注册</button>
+      <button class="ghost" onclick="closeRegister()">取消</button>
+      <span id="regStatus" class="muted"></span>
+    </div>
+  </div>
+</div>
+
 <script>
 function $(id) { return document.getElementById(id); }
-var STATE = { bridges: [], pollTimer: null };
+var STATE = { bridge: null, bridges: [], pollTimer: null };
 
 function esc(s) {
   return String(s == null ? "" : s)
@@ -359,32 +417,23 @@ function showTab(name) {
   for (var j = 0; j < secs.length; j++) secs[j].style.display = "none";
   var el = $("tab-" + name);
   if (el) el.style.display = "block";
-  if (name === "run") { fillBridgeSelect("runBridge"); loadRunTemplates(); }
-  if (name === "download") { fillBridgeSelect("dlBridge"); loadReports(); }
-  if (name === "upload") { fillBridgeSelect("srBridge"); resetUploadPanel(); }
+  if (!currentBridgeId()) { loadCurrentBridge(); return; }
+  if (name === "run") { loadRunTemplates(); checkPeriod(); }
+  if (name === "download") loadReports();
+  if (name === "upload") { $("srBridgeHint").textContent = "上传到当前桥：" + (STATE.bridge ? STATE.bridge.name : ""); resetUploadPanel(); }
   if (name === "preprocess") loadPreprocessConfig();
-  if (name === "config") { fillBridgeSelect("cfgBridge"); loadConfig(); }
-  if (name === "scheduler") { fillBridgeSelect("schBridge"); loadScheduler(); }
-  if (name === "review") { fillBridgeSelect("revBridge"); loadReview(); }
-  if (name === "log") fillBridgeSelect("logBridge");
+  if (name === "config") loadConfig();
+  if (name === "scheduler") loadScheduler();
+  if (name === "review") loadReview();
+  if (name === "log") loadLog();
 }
 
-function fillBridgeSelect(id) {
-  var sel = $(id);
-  if (!sel || !STATE.bridges.length) return;
-  var cur = sel.value;
-  sel.innerHTML = "";
-  STATE.bridges.forEach(function (b) {
-    var o = document.createElement("option");
-    o.value = b.id;
-    o.textContent = b.name + (b.host ? "（" + b.host + "）" : "");
-    sel.appendChild(o);
-  });
-  if (cur) sel.value = cur;
+function currentBridgeId() {
+  return STATE.bridge ? STATE.bridge.id : "";
 }
 
 function loadRunTemplates() {
-  var bridgeId = $("runBridge").value;
+  var bridgeId = currentBridgeId();
   if (!bridgeId) return;
   api("/api/bridges/" + bridgeId + "/templates").then(function (d) {
     var sel = $("runTemplate");
@@ -401,40 +450,159 @@ function loadRunTemplates() {
   }).catch(function () {});
 }
 
-function bridgeCardHtml(b) {
-  var dot = b.running ? "run" : (b.config_ok ? "ok" : "bad");
+function renderCurrentCard() {
+  var b = STATE.bridge;
+  var box = $("currentBridgeCard");
+  if (!b) { box.innerHTML = '<p class="muted">本机尚未登记桥梁，请在上方选择“新桥注册”完成登记。</p>'; return; }
+  var dot = b.config_ok ? "ok" : "bad";
   var last = "尚无运行记录";
   if (b.last_run) {
     last = (b.last_run.period && b.last_run.period.label ? b.last_run.period.label : "—") +
       " · 未填充单元格 " + (b.last_run.missing_cells || 0);
   }
-  var h = '<div class="card"><h3><span class="dot ' + dot + '"></span>' + esc(b.name);
-  if (b.running) h += ' <span class="badge" style="color:var(--warn)">运行中</span>';
-  h += '</h3><div class="kv">';
-  h += '<b>服务器</b><span>' + esc(b.host || "未配置") + '</span>';
+  var h = '<div class="cur-card"><h2><span class="dot ' + dot + '"></span>' + esc(b.name) + '</h2><div class="kv">';
+  h += '<b>桥 ID</b><span>' + esc(b.id) + '</span>';
   h += '<b>配置</b><span>' + (b.config_ok ? "正常" : esc(b.config_error || "缺失")) + '</span>';
   h += '<b>真实数据</b><span>' + (b.bridge_data ? "已启用" : "未启用") + '</span>';
   h += '<b>报告数</b><span>' + (b.report_count || 0) + '</span>';
   h += '<b>最近报告</b><span>' + esc(b.latest_report || "—") + '</span>';
   h += '<b>上次运行</b><span>' + esc(last) + '</span>';
-  h += '</div><div class="row" style="margin-top:10px;margin-bottom:0">';
-  h += '<button onclick="quickRun(\'' + b.id + '\')">生成</button>';
-  h += '<button class="ghost" onclick="openBridge(\'' + b.id + '\')">详情</button>';
-  if (b.host) h += '<a class="right muted" href="http://' + esc(b.host) + ':' + b.port + '" target="_blank">打开服务器 ' + b.port + ' ↗</a>';
+  h += '</div><div class="row" style="margin-top:12px;margin-bottom:0">';
+  h += '<button onclick="showTab(\'run\')">生成报告</button>';
+  h += '<button class="ghost" onclick="showTab(\'download\')">下载 / 预览</button>';
+  h += '<button class="ghost" onclick="showTab(\'review\')">审查问题</button>';
+  h += '<button class="ghost" onclick="showTab(\'config\')">配置管理</button>';
   h += '</div></div>';
-  return h;
+  box.innerHTML = h;
 }
 
-function loadBridges() {
-  api("/api/bridges").then(function (data) {
-    STATE.bridges = data.bridges;
-    $("bridgeCards").innerHTML = data.bridges.map(bridgeCardHtml).join("");
-    fillBridgeSelect("runBridge");
+function loadCurrentBridge() {
+  api("/api/current-bridge").then(function (data) {
+    STATE.bridges = data.bridges || [];
+    STATE.bridge = data.bridge || null;
+    var sel = $("curBridge");
+    sel.innerHTML = "";
+    (data.bridges || []).forEach(function (b) {
+      var o = document.createElement("option");
+      o.value = b.id;
+      o.textContent = b.name;
+      sel.appendChild(o);
+    });
+    if (data.bridge) sel.value = data.bridge.id;
+    $("curBridgeName").textContent = data.bridge ? data.bridge.id : "（未登记）";
+    $("curBridgeStatus").textContent = data.bridge ? (data.bridge.config_ok ? "配置正常" : "配置缺失") : "";
+    $("curBridgeStatus").className = "badge " + (data.bridge && data.bridge.config_ok ? "on" : "");
+    renderCurrentCard();
+    if (!data.bridge) {
+      $("curMode").value = "new";
+      $("curBridge").style.display = "none";
+      showRegister();
+    }
+    var active = document.querySelector("nav button.active");
+    if (active) showTab(active.dataset.tab);
   }).catch(function (e) { showMsg(String(e), "err"); });
 }
 
-function openBridge(id) { showTab("run"); $("runBridge").value = id; }
-function quickRun(id) { showTab("run"); $("runBridge").value = id; startRun(); }
+function onBridgeModeChange() {
+  if ($("curMode").value === "new") {
+    $("curBridge").style.display = "none";
+    showRegister();
+  } else {
+    $("curBridge").style.display = "";
+    closeRegister();
+  }
+}
+
+function onBridgeSwitch() {
+  var id = $("curBridge").value;
+  if (!id || id === currentBridgeId()) return;
+  api("/api/bridges/switch", {
+    method: "POST", body: JSON.stringify({ bridge_id: id })
+  }).then(function (d) {
+    showMsg("已切换当前桥：" + d.bridge.name, "ok");
+    loadCurrentBridge();
+  }).catch(function (e) { showMsg(String(e), "err"); });
+}
+
+function showRegister() {
+  $("regMask").classList.add("show");
+  fillRegTemplates();
+  fillRegLlmProviders();
+}
+
+function closeRegister() {
+  $("regMask").classList.remove("show");
+  $("regStatus").textContent = "";
+}
+
+function fillRegTemplates() {
+  var bridgeId = currentBridgeId();
+  var sel = $("regTemplate");
+  sel.innerHTML = '<option value="">（上传模板文件优先，此项可选）</option>';
+  if (!bridgeId) return;
+  api("/api/bridges/" + bridgeId + "/templates").then(function (d) {
+    (d.templates || []).forEach(function (t) {
+      var o = document.createElement("option");
+      o.value = t.path;
+      o.textContent = t.name;
+      sel.appendChild(o);
+    });
+  }).catch(function () {});
+}
+
+function fillRegLlmProviders() {
+  var sel = $("regLlmProvider");
+  sel.innerHTML = '<option value="">请选择供应商</option>';
+  Object.keys(LLM_PROVIDERS).forEach(function (k) {
+    var p = LLM_PROVIDERS[k];
+    var o = document.createElement("option");
+    o.value = k;
+    o.textContent = p.label + "（" + p.model + "）";
+    sel.appendChild(o);
+  });
+}
+
+function submitRegister() {
+  var name = $("regName").value.trim();
+  if (!name) { showMsg("请填写桥名", "err"); return; }
+  var fd = new FormData();
+  fd.append("bridge_name", name);
+  fd.append("raw_data_dir", $("regRaw").value.trim());
+  fd.append("daily_dir", $("regDaily").value.trim());
+  fd.append("stats_dir", $("regStats").value.trim());
+  fd.append("charts_dir", $("regCharts").value.trim());
+  fd.append("template", $("regTemplate").value || "");
+  fd.append("llm_provider", $("regLlmProvider").value);
+  fd.append("llm_api_key", $("regLlmKey").value.trim());
+  fd.append("llm_model", $("regLlmModel").value.trim());
+  fd.append("schedule_mode", $("regScheduleMode").value);
+  fd.append("schedule_start_date", $("regScheduleStart").value || "");
+  var files = [
+    ["regMapDocx", "sensor_map_docx"],
+    ["regSourceReport", "source_report"],
+    ["regTemplateFile", "template_file"]
+  ];
+  files.forEach(function (pair) {
+    var f = $(pair[0]).files[0];
+    if (f) fd.append(pair[1], f);
+  });
+  var headers = {};
+  var t = token();
+  if (t) headers["X-Auth-Token"] = t;
+  $("regStatus").textContent = "注册中…";
+  fetch("/api/bridges/register", { method: "POST", body: fd, headers: headers })
+    .then(function (res) { return res.json(); })
+    .then(function (d) {
+      if (d.error) throw new Error(d.error);
+      showMsg("新桥已注册：" + d.bridge_name + "（" + d.bridge_id + "），配置文件已生成", "ok");
+      $("regStatus").textContent = "";
+      $("regMask").classList.remove("show");
+      $("curMode").value = "existing";
+      $("curBridge").style.display = "";
+      loadCurrentBridge();
+    })
+    .catch(function (e) { showMsg(String(e), "err"); $("regStatus").textContent = ""; });
+}
 
 function onModeChange() {
   var mode = $("runMode").value;
@@ -469,16 +637,12 @@ function defaultYear() {
 }
 $("runMode").addEventListener("change", onModeChange);
 $("runEnd").addEventListener("change", checkPeriod);
-$("runBridge").addEventListener("change", function () {
-  loadRunTemplates();
-  checkPeriod();
-});
 $("runQuarter").value = defaultQuarter().quarter;
 $("runYear").value = defaultYear();
 onModeChange();
 
 function checkPeriod() {
-  var bridgeId = $("runBridge").value;
+  var bridgeId = currentBridgeId();
   if (!bridgeId) return;
   var mode = $("runMode").value;
   var url = "/api/bridges/" + bridgeId + "/period?mode=" + encodeURIComponent(mode);
@@ -505,7 +669,7 @@ function checkPeriod() {
 }
 
 function startRun() {
-  var bridgeId = $("runBridge").value;
+  var bridgeId = currentBridgeId();
   var body = {
     mode: $("runMode").value,
     date: $("runEnd").value || "",
@@ -566,8 +730,8 @@ function pollRun(bridgeId) {
           };
           $("runResult").innerHTML = "<pre>" + esc(JSON.stringify(s, null, 2)) + "</pre>";
         }
-        loadBridges();
-        if (bridgeId === $("dlBridge").value) loadReports();
+        loadCurrentBridge();
+        loadReports();
         checkPeriod();
       } else {
         $("runStatus").textContent = "运行中…（PID " + (st.running.pid || "?") + "）";
@@ -577,7 +741,7 @@ function pollRun(bridgeId) {
 }
 
 function loadReports() {
-  var bridgeId = $("dlBridge").value;
+  var bridgeId = currentBridgeId();
   if (!bridgeId) return;
   var tbody = $("reportTable").querySelector("tbody");
   tbody.innerHTML = "";
@@ -630,6 +794,7 @@ function loadPreprocessConfig() {
     $("ppStats").value = c.stats_dir || "";
     $("ppMapDocx").value = c.sensor_map_docx || "";
     $("ppBridge").value = c.bridge_name || "";
+    if (!$("ppBridge").value && STATE.bridge) $("ppBridge").value = STATE.bridge.name;
     $("ppStart").value = c.start || "";
     $("ppEnd").value = c.end || "";
     refreshPreprocess();
@@ -707,7 +872,7 @@ function pollPreprocess() {
 }
 
 function loadConfig() {
-  var bridgeId = $("cfgBridge").value;
+  var bridgeId = currentBridgeId();
   if (!bridgeId) return;
   api("/api/bridges/" + bridgeId + "/config").then(function (c) {
     var bd = c.bridge_data || {};
@@ -754,9 +919,13 @@ function applyLlmProvider(prov) {
 $("cfgLlmProvider").addEventListener("change", function () {
   applyLlmProvider($("cfgLlmProvider").value);
 });
+$("regLlmProvider").addEventListener("change", function () {
+  var p = LLM_PROVIDERS[$("regLlmProvider").value];
+  if (p) $("regLlmModel").value = p.model;
+});
 
 function testLlm() {
-  var bridgeId = $("cfgBridge").value;
+  var bridgeId = currentBridgeId();
   if (!bridgeId) return;
   $("llmTestResult").textContent = "测试中…";
   api("/api/bridges/" + bridgeId + "/llm/test", {
@@ -785,7 +954,7 @@ function testLlm() {
 }
 
 function testDataPaths() {
-  var bridgeId = $("cfgBridge").value;
+  var bridgeId = currentBridgeId();
   if (!bridgeId) return;
   $("dataTestResult").textContent = "测试中…";
   api("/api/bridges/" + bridgeId + "/data").then(function (d) {
@@ -805,7 +974,7 @@ function testDataPaths() {
 }
 
 function saveConfig() {
-  var bridgeId = $("cfgBridge").value;
+  var bridgeId = currentBridgeId();
   if (!bridgeId) return;
   var _llm = {
     provider: $("cfgLlmProvider").value,
@@ -830,7 +999,7 @@ function saveConfig() {
 }
 
 function uploadTemplate() {
-  var bridgeId = $("cfgBridge").value;
+  var bridgeId = currentBridgeId();
   var f = $("tplFile").files[0];
   if (!bridgeId || !f) { showMsg("请选择模板文件", "err"); return; }
   var fd = new FormData();
@@ -854,23 +1023,13 @@ function resetUploadPanel() {
   $("srStatus").textContent = "";
 }
 
-$("srTarget").addEventListener("change", function () {
-  $("srNewFields").style.display = $("srTarget").value === "new" ? "" : "none";
-});
-
 function uploadSourceReport() {
-  var bridgeId = $("srBridge").value;
+  var bridgeId = currentBridgeId();
   var f = $("srFile").files[0];
-  if (!bridgeId || !f) { showMsg("请选择桥和成品报告文件", "err"); return; }
-  var target = $("srTarget").value;
+  if (!bridgeId || !f) { showMsg("请选择成品报告文件（当前桥：" + (STATE.bridge ? STATE.bridge.name : "") + "）", "err"); return; }
   var fd = new FormData();
   fd.append("file", f);
-  fd.append("bridge_target", target);
-  if (target === "new") {
-    fd.append("new_bridge_id", $("srNewId").value.trim());
-    fd.append("new_bridge_name", $("srNewName").value.trim());
-    if (!$("srNewName").value.trim()) { showMsg("新桥请填写桥名", "err"); return; }
-  }
+  fd.append("bridge_target", "same");
   var headers = {};
   var t = token();
   if (t) headers["X-Auth-Token"] = t;
@@ -879,20 +1038,9 @@ function uploadSourceReport() {
     .then(function (res) { return res.json(); })
     .then(function (d) {
       if (d.error) throw new Error(d.error);
-      if (target === "new") {
-        showMsg("新桥已登记：" + d.bridge_name + "（" + d.bridge_id + "）", "ok");
-        loadBridges();
-        setTimeout(function () {
-          if (d.bridge_id) {
-            $("srBridge").value = d.bridge_id;
-            fillBridgeSelect("srBridge");
-          }
-        }, 300);
-      } else {
-        showMsg("成品报告已上传", "ok");
-      }
+      showMsg("成品报告已上传", "ok");
       $("srSaved").textContent = "已保存：" + d.source_report +
-        (d.template ? "　当前模版：" + d.template : "（新桥尚无模版，可②重新解析或③上传模版）");
+        (d.template ? "　当前模版：" + d.template : "（当前桥尚无模版，可②重新解析或③上传模版）");
       $("srActions").style.display = "";
       $("srStatus").textContent = "完成";
     })
@@ -900,14 +1048,13 @@ function uploadSourceReport() {
 }
 
 function currentUploadBridge() {
-  return $("srBridge").value;
+  return currentBridgeId();
 }
 
 function useExistingTemplate() {
   var bridgeId = currentUploadBridge();
   if (!bridgeId) return;
   showTab("run");
-  $("runBridge").value = bridgeId;
   startRun();
 }
 
@@ -1002,7 +1149,7 @@ function uploadTemplateLocal() {
 }
 
 function uploadSensorMapDocx() {
-  var bridgeId = $("srBridge").value;
+  var bridgeId = currentBridgeId();
   var f = $("smapFile").files[0];
   if (!f) { showMsg("请选择测点编号表格文件", "err"); return; }
   var fd = new FormData();
@@ -1030,7 +1177,7 @@ function uploadSensorMapDocx() {
 }
 
 function loadScheduler() {
-  var bridgeId = $("schBridge").value;
+  var bridgeId = currentBridgeId();
   if (!bridgeId) return;
   api("/api/bridges/" + bridgeId + "/scheduler").then(function (s) {
     $("schStatus").innerHTML = s.running
@@ -1045,7 +1192,7 @@ function loadScheduler() {
 }
 
 function saveSchedule() {
-  var bridgeId = $("schBridge").value;
+  var bridgeId = currentBridgeId();
   if (!bridgeId) return;
   var body = {
     schedule: {
@@ -1062,7 +1209,7 @@ function saveSchedule() {
 }
 
 function startScheduler() {
-  var bridgeId = $("schBridge").value;
+  var bridgeId = currentBridgeId();
   if (!bridgeId) return;
   api("/api/bridges/" + bridgeId + "/scheduler/start", { method: "POST", body: "{}" })
     .then(function (r) { showMsg("调度器已启动（PID " + r.pid + "）", "ok"); loadScheduler(); })
@@ -1070,7 +1217,7 @@ function startScheduler() {
 }
 
 function stopScheduler() {
-  var bridgeId = $("schBridge").value;
+  var bridgeId = currentBridgeId();
   if (!bridgeId) return;
   api("/api/bridges/" + bridgeId + "/scheduler/stop", { method: "POST", body: "{}" })
     .then(function () { showMsg("调度器已停止", "ok"); loadScheduler(); })
@@ -1078,7 +1225,7 @@ function stopScheduler() {
 }
 
 function loadLog() {
-  var bridgeId = $("logBridge").value;
+  var bridgeId = currentBridgeId();
   if (!bridgeId) return;
   api("/api/bridges/" + bridgeId + "/log?name=" + $("logName").value + "&lines=" + $("logLines").value)
     .then(function (r) { $("logBody").textContent = r.log || "（空）"; })
@@ -1086,7 +1233,7 @@ function loadLog() {
 }
 
 function loadReview() {
-  var bridgeId = $("revBridge").value;
+  var bridgeId = currentBridgeId();
   if (!bridgeId) return;
   api("/api/bridges/" + bridgeId + "/review").then(function (r) {
     var h = "";
@@ -1172,8 +1319,8 @@ api("/api/status").then(function (st) {
   $("modeBadge").textContent = "独立桥服务器模式";
   $("authBadge").textContent = st.auth_required ? "已启用令牌鉴权" : "未鉴权（本机）";
   $("tokenInput").value = token();
-  loadBridges();
-}).catch(function () { loadBridges(); });
+  loadCurrentBridge();
+}).catch(function () { loadCurrentBridge(); });
 </script>
 <div id="pvMask" class="modal-mask">
   <div class="modal">

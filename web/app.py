@@ -45,6 +45,7 @@ logging.basicConfig(
 
 WEB_TOKEN = os.environ.get("REPORT_WEB_TOKEN", "")
 REGISTRY = os.environ.get("REPORT_WEB_REGISTRY", os.path.join(ROOT, "bridges", "registry.json"))
+CURRENT_BRIDGE_FILE = os.path.join(ROOT, "web", "current_bridge.json")
 
 # LLM 供应商：后端统一配置 API 地址，前端只需选供应商 + 填 API Key
 LLM_PROVIDERS = {
@@ -257,6 +258,28 @@ def _config_for(bridge_id: str) -> Optional[Dict]:
         return {"error": str(exc), "_config_path": cfg_path}
 
 
+def _load_current_bridge_id() -> str:
+    """返回本机当前桥 ID：优先 web/current_bridge.json，其次注册表第一座桥。"""
+    try:
+        if os.path.isfile(CURRENT_BRIDGE_FILE):
+            with open(CURRENT_BRIDGE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            bid = str(data.get("bridge_id") or "")
+            if bid and get_bridge(bid, REGISTRY):
+                return bid
+    except Exception:  # noqa: BLE001
+        pass
+    bridges = list_bridges(REGISTRY)
+    return bridges[0].get("id", "") if bridges else ""
+
+
+def _save_current_bridge_id(bid: str) -> None:
+    os.makedirs(os.path.dirname(CURRENT_BRIDGE_FILE), exist_ok=True)
+    with open(CURRENT_BRIDGE_FILE, "w", encoding="utf-8") as f:
+        json.dump({"bridge_id": bid, "saved_at": dt.datetime.now().isoformat()},
+                  f, ensure_ascii=False, indent=2)
+
+
 def _config_path_for(bridge_id: str) -> Optional[str]:
     return resolve_bridge_config(bridge_id, REGISTRY)
 
@@ -420,6 +443,158 @@ def api_bridges():
     if auth:
         return auth
     return jsonify({"bridges": [_bridge_snapshot(b) for b in list_bridges(REGISTRY)]})
+
+
+@app.route("/api/current-bridge")
+def api_current_bridge():
+    auth = _require_token()
+    if auth:
+        return auth
+    bid = _load_current_bridge_id()
+    b = get_bridge(bid, REGISTRY) if bid else None
+    if not b:
+        return jsonify({"bridge_id": "", "bridge": None, "bridges": []})
+    return jsonify({
+        "bridge_id": bid,
+        "bridge": _bridge_snapshot(b),
+        "bridges": [_bridge_snapshot(x) for x in list_bridges(REGISTRY)],
+    })
+
+
+@app.route("/api/bridges/switch", methods=["POST"])
+def api_bridge_switch():
+    auth = _require_token()
+    if auth:
+        return auth
+    data = request.get_json(silent=True) or {}
+    bid = str(data.get("bridge_id") or "").strip()
+    b = get_bridge(bid, REGISTRY)
+    if not b:
+        return jsonify({"error": f"未找到桥梁 {bid}"}), 404
+    _save_current_bridge_id(bid)
+    log.info("切换当前桥: %s", bid)
+    return jsonify({"ok": True, "bridge_id": bid,
+                    "bridge": _bridge_snapshot(b)})
+
+
+@app.route("/api/bridges/register", methods=["POST"])
+def api_bridge_register():
+    """新桥注册：保存上传文件 + 生成 config_<id>.json + 登记 registry +
+    更新 preprocess 配置 + 设为当前桥。表单字段见前端注册面板。"""
+    auth = _require_token()
+    if auth:
+        return auth
+    bridge_name = str(request.form.get("bridge_name") or "").strip()
+    if not bridge_name:
+        return jsonify({"error": "请填写桥名"}), 400
+
+    inputs_dir = os.path.join(ROOT, "inputs")
+    templates_dir = os.path.join(ROOT, "templates")
+    os.makedirs(inputs_dir, exist_ok=True)
+    os.makedirs(templates_dir, exist_ok=True)
+
+    def _save_upload(field: str, folder: str, prefix: str = "") -> str:
+        f = request.files.get(field)
+        if not f or not f.filename:
+            return ""
+        name = _repair_filename(os.path.basename(f.filename))
+        if prefix:
+            name = prefix + name
+        dest = os.path.join(folder, name)
+        if os.path.isfile(dest):
+            stem, ext = os.path.splitext(name)
+            dest = os.path.join(
+                folder, f"{stem}_{dt.datetime.now():%Y%m%d_%H%M%S}{ext}")
+        f.save(dest)
+        return dest
+
+    # 1) 上传文件落盘
+    source_report = _save_upload("source_report", inputs_dir)
+    sensor_map_docx = _save_upload("sensor_map_docx", inputs_dir)
+    template_file = ""
+    tf = request.files.get("template_file")
+    if tf and tf.filename:
+        # 按 <桥名>_template_vN 命名，保证模板列表能识别、可被选择
+        tpl_name = _next_template_version(bridge_name)
+        template_file = os.path.join(templates_dir, tpl_name)
+        tf.save(template_file)
+
+    # 2) 更新 preprocess 配置（原始/日级数据目录、传感器编号表格）
+    try:
+        pcfg = {}
+        if os.path.isfile(PREPROCESS_CONFIG):
+            with open(PREPROCESS_CONFIG, "r", encoding="utf-8") as f:
+                pcfg = json.load(f)
+        raw = str(request.form.get("raw_data_dir") or "").strip()
+        daily = str(request.form.get("daily_dir") or "").strip()
+        if raw:
+            pcfg["raw_data_dir"] = raw.replace("\\", "/")
+        if daily:
+            pcfg["daily_dir"] = daily.replace("\\", "/")
+        if sensor_map_docx:
+            pcfg["sensor_map_docx"] = _portable_path(sensor_map_docx)
+        with open(PREPROCESS_CONFIG, "w", encoding="utf-8") as f:
+            json.dump(pcfg, f, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("更新 preprocess 配置失败: %s", exc)
+
+    # 3) 生成桥配置（含表单覆盖项）
+    from setup_bridge import _bridge_id, build_config, register_bridge
+    ov = {}
+    for k in ("stats_dir", "charts_dir", "sensor_map", "name_dict"):
+        v = str(request.form.get(k) or "").strip()
+        if v:
+            ov[k] = v
+    tpl = str(request.form.get("template") or "").strip()
+    if template_file:
+        ov["template"] = _portable_path(template_file)
+    elif tpl:
+        ov["template"] = tpl
+    llm = {}
+    prov = str(request.form.get("llm_provider") or "").strip()
+    key = str(request.form.get("llm_api_key") or "").strip()
+    model = str(request.form.get("llm_model") or "").strip()
+    if prov or key or model:
+        llm["provider"] = prov or "qwen"
+        llm["api_key"] = key
+        if prov in LLM_PROVIDERS:
+            llm["api_base"] = LLM_PROVIDERS[prov]["api_base"]
+            llm["model"] = model or LLM_PROVIDERS[prov]["model"]
+        else:
+            llm["model"] = model or "qwen-plus"
+    if llm:
+        ov["llm"] = llm
+    sch = {}
+    smode = str(request.form.get("schedule_mode") or "").strip()
+    sdate = str(request.form.get("schedule_start_date") or "").strip()
+    if smode in ("quarterly", "yearly"):
+        sch["mode"] = smode
+    if sdate:
+        sch["start_date"] = sdate
+    if sch:
+        ov["schedule"] = sch
+
+    bid = _bridge_id(bridge_name)
+    cfg = build_config(bridge_name, source_report, overrides=ov)
+    cfg_dir = os.path.join(ROOT, "config")
+    os.makedirs(cfg_dir, exist_ok=True)
+    cfg_path = os.path.join(cfg_dir, f"config_{bid}.json")
+    try:
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": f"配置文件写入失败: {exc}"}), 500
+    register_bridge(bid, bridge_name, cfg_path)
+    _save_current_bridge_id(bid)
+    log.info("新桥注册完成: id=%s name=%s config=%s", bid, bridge_name, cfg_path)
+    return jsonify({
+        "ok": True,
+        "bridge_id": bid,
+        "bridge_name": bridge_name,
+        "config": os.path.join("config", f"config_{bid}.json"),
+        "source_report": _portable_path(source_report) if source_report else "",
+        "template": cfg.get("template", ""),
+    })
 
 
 @app.route("/api/bridges/<bridge_id>")

@@ -977,6 +977,8 @@ def build_report(
     chart_captions: Optional[Dict[str, str]] = None,
     extra_charts: Optional[Dict[str, List[Dict]]] = None,
     text_replace: Optional[Dict[str, str]] = None,
+    caption_removals: Optional[List[str]] = None,
+    caption_replacements: Optional[Dict[str, str]] = None,
     repair_stats: Optional[Dict] = None,
 ) -> List[str]:
     """基于模板生成报告，返回未替换的占位符列表（strict=True 时抛出异常）。"""
@@ -1110,6 +1112,10 @@ def build_report(
             _set_auto_line_spacing(pa)
     if text_replace:
         _apply_text_replacements(doc, text_replace)
+    if caption_replacements:
+        _apply_text_replacements(doc, caption_replacements)
+    if caption_removals:
+        _remove_paragraphs_by_fragment(doc, caption_removals)
     _n_fixed = _collapse_extra_spaces(doc)
     if repair_stats is not None:
         repair_stats["spaces_collapsed"] = repair_stats.get(
@@ -1361,6 +1367,23 @@ def _apply_text_replacements(doc: Document, replacements: Dict[str, str]) -> int
     if changed:
         log.info("文字修正 %d 处：%s", changed, replacements)
     return changed
+
+
+def _remove_paragraphs_by_fragment(doc: Document, fragments: List[str]) -> int:
+    """删除全文里包含任一错误图注片段的段落（用于审查发现的错误配图说明）。"""
+    removed = 0
+    frags = [f for f in (fragments or []) if f]
+    if not frags:
+        return 0
+    for paragraph in _walk_paragraphs(doc):
+        full = "".join(r.text for r in paragraph.runs)
+        if any(f in full for f in frags):
+            for r in paragraph.runs:
+                r.text = ""
+            removed += 1
+    if removed:
+        log.info("删除错误图注段落 %d 处", removed)
+    return removed
 
 
 def _remaining_markers(doc: Document) -> List[str]:

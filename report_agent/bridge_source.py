@@ -394,6 +394,7 @@ class BridgeData:
         self._stats_cache: Dict[str, Dict] = {}          # 编号 -> 统计值 JSON
         self._agg_cache: Optional[Dict] = None            # 季度/年度统计.json 缓存
         self._summary_cache: Dict[str, str] = {}          # (指标|报告期) -> 总结句缓存
+        self._source_text: str = ""                       # 成品报告原文（供总结润色对照）
         self._sensor_features: Dict[str, List[str]] = {} # 编号 -> 特征列表
         self._match_stats = {"name_dict": 0, "alias": 0, "sensor_map": 0, "fuzzy": 0, "metric_fallback": 0}
         self._chart_seq: Dict = {}                       # (metric,位置) -> 已分配序号
@@ -878,6 +879,38 @@ class BridgeData:
                                for w in excl_words)]
         return sorted(sids, key=lambda x: int(x) if x.isdigit() else x)
 
+    def _sensors_for_metric_family(self, metric: str) -> List[str]:
+        """返回该指标特征族（含 X/Y/Z 轴分量）的全部传感器。
+
+        用于方向化聚合（displacement_z 等）：sensors_for_metric 只按
+        metric.feature（如 GNSS(Δx)）过滤，会把 GNSS(Δy/Δz) 传感器漏掉，
+        导致 Y/Z 方向取不到正确测点。这里按 feature_group 归组补全。
+        """
+        feat = self.metrics.get(metric, {}).get("feature", "")
+        group = feature_group(feat) if feat else ""
+        sids = []
+        for sid, feats in self._sensor_features.items():
+            if self._is_excluded(sid):
+                continue
+            if self.bridge_name:
+                bname = self.sensor_map.get(sid, {}).get("桥名", "")
+                if bname and not _bridge_name_match(bname, self.bridge_name):
+                    continue
+            if group and any(feature_group(f) == group for f in feats):
+                sids.append(sid)
+            elif feat and feat in feats:
+                sids.append(sid)
+        if not sids:
+            sids = self.sensors_for_metric(metric)
+        # 指标级排除位置词与 sensors_for_metric 保持一致
+        excl_words = [w for w in (self.metrics.get(metric, {}) or {}).get(
+            "exclude_position_words") or [] if w]
+        if excl_words:
+            sids = [sid for sid in sids
+                    if not any(w in self._position_for_sensor(sid)
+                               for w in excl_words)]
+        return sorted(set(sids), key=lambda x: int(x) if x.isdigit() else x)
+
     def _is_excluded(self, sensor_id: str) -> bool:
         if sensor_id in self.sensor_exclude:
             return True
@@ -1281,8 +1314,16 @@ class BridgeData:
         text = ""
         classifier = LLMClassifier(llm_cfg or {})
         if classifier.available():
+            src = self._source_excerpt_for(label)
+            prompt = digest["prompt"]
+            if src:
+                prompt = (
+                    prompt
+                    + "。成品报告原文对应该指标的结论（仅作对照，若与真实数据矛盾"
+                    "必须以真实数据为准）：" + src
+                )
             text = classifier.summarize_feature(
-                digest["prompt"], max_chars=100)
+                prompt, max_chars=100)
             if text and not self._summary_text_valid(text, digest):
                 log.warning("总结数值与统计摘要不一致，降级为规则化兜底: %s",
                             text)
@@ -1292,6 +1333,26 @@ class BridgeData:
         text = normalize_unit_spacing(text)
         self._summary_cache[cache_key] = text
         return text
+
+    def _source_excerpt_for(self, label: str) -> str:
+        """从成品报告原文里取该指标相关的一段结论（≤160 字），供总结润色对照。"""
+        src = (self._source_text or "").strip()
+        if not src or not label:
+            return ""
+        # 按句切分，找含指标标签的句子，向前后各延 1 句
+        sents = re.split(r"(?<=[。；;])", src)
+        hits = [i for i, s in enumerate(sents) if label in s]
+        if not hits:
+            # 标签没命中时，退回包含“监测/正常/异常/故障/缺失”的结论句
+            hits = [i for i, s in enumerate(sents)
+                    if any(w in s for w in ("监测", "正常", "异常", "故障", "缺失"))]
+        if not hits:
+            return ""
+        i = hits[0]
+        lo = max(0, i - 1)
+        hi = min(len(sents), i + 2)
+        excerpt = "".join(sents[lo:hi]).strip()
+        return excerpt[:160]
 
     @staticmethod
     def _summary_text_valid(text: str, digest: Dict) -> bool:
@@ -2603,7 +2664,9 @@ class BridgeData:
                 "Y": ("GNSS(Δy)", "SZJSD(yJsd)", "DZJSD(yJsd)", "EZJD(yJd)"),
                 "Z": ("GNSS(Δz)", "SZJSD(zJsd)", "DZJSD(zJsd)"),
             }.get(metric_dir, ())
-        for sid in self.sensors_for_metric(metric):
+        family_sids = self._sensors_for_metric_family(metric) if metric_dir \
+            else self.sensors_for_metric(metric)
+        for sid in family_sids:
             if metric_dir:
                 feats = self._sensor_features.get(str(sid), []) or []
                 # 方向 x/y/z 匹配括号内编码：Δx/x/xJsd/yJsd/zJsd 等
@@ -3111,6 +3174,56 @@ class BridgeData:
         """把图表占位符解析为图库图片路径；找不到返回 None。"""
         info = self.resolve_chart_info(chart_id, caption, context)
         return info["path"] if info else None
+
+    def find_sensor_by_hint(self, metric: str, hint: str,
+                            side: str = "") -> Optional[str]:
+        """按“位置/方向”提示定位传感器（供自动修复重索引用）。
+
+        先用 _extract_location 抽位置，再用 _sensors_at_position / 位置展开找
+        候选；有明确左右幅/上下游时做方向过滤。找不到返回 None（不猜）。
+        """
+        if not hint:
+            return None
+        loc = self._extract_location(str(hint)) or str(hint)
+        sids = self._sensors_at_position(loc, metric) if metric else []
+        if not sids:
+            sids = self._location_sensors(metric, loc)
+        if not sids:
+            return None
+        if side:
+            sided = [s for s in sids
+                     if side in (self._position_for_sensor(s) or "")]
+            if sided:
+                sids = sided
+        return sids[0] if sids else None
+
+    def resolve_chart_with_hint(self, chart_id: str, hint: str,
+                                kind: str = "", metric: str = "") -> Optional[Dict]:
+        """用纠正后的位置/方向提示重新解析一张图（供自动修复）。
+
+        返回 {path, sensor_id, kind, display}；解析不到或候选不唯一时返回 None。
+        """
+        if not self.charts_dir or not hint:
+            return None
+        parsed = self._parse_chart_id(chart_id)
+        metric = metric or (parsed[0] if parsed else "")
+        kind = kind or (parsed[1] if parsed else "trend")
+        if kind not in CHART_KIND_FILE and kind not in ("scatter", "correlation"):
+            kind = "trend"
+        side = self._context_side([hint])
+        sid = self.find_sensor_by_hint(metric, hint, side=side)
+        if not sid:
+            return None
+        png = self.chart_png_for(sid, kind, metric)
+        if not png:
+            return None
+        return {
+            "path": png,
+            "sensor_id": sid,
+            "kind": kind,
+            "display": self.display_name_for(
+                sid, chart_id, kind, metric_for_label=metric),
+        }
 
     def resolve_chart_info(self, chart_id: str, caption: str = "", context=None,
                            metric_hint: str = "", sensor_hint: str = "",

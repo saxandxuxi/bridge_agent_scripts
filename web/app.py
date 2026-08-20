@@ -292,6 +292,12 @@ def _repair_filename(name: str) -> str:
     return name
 
 
+def _esc(s: str) -> str:
+    """HTML 转义，供 docx 预览等拼接 HTML 时使用。"""
+    import html as _html
+    return _html.escape(str(s or ""))
+
+
 def _portable_path(path: str) -> str:
     """保存路径时尽量用相对项目根目录的写法；项目外的绝对路径（原始数据、
     外部预处理产物等）保持绝对路径不变。统一用 / 分隔。"""
@@ -1009,6 +1015,141 @@ def api_bridge_report_download(bridge_id, filename):
     if not os.path.isfile(path) or not safe.lower().endswith(".docx"):
         return jsonify({"error": "文件不存在"}), 404
     return send_file(path, as_attachment=True, download_name=safe)
+
+
+def _docx_to_html(path: str) -> str:
+    """把 docx 转成轻量 HTML（段落 + 表格 + 内嵌图片 base64），用于网页预览。"""
+    import base64
+    from docx import Document
+    from docx.oxml.ns import qn
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    doc = Document(path)
+    out = []
+
+    def para_html(p) -> str:
+        imgs = []
+        for blip in p._p.findall(".//" + qn("a:blip")):
+            rid = blip.get(qn("r:embed"))
+            if not rid:
+                continue
+            try:
+                part = doc.part.rels[rid].target_part
+                b64 = base64.b64encode(part.blob).decode("ascii")
+                ct = part.content_type or "image/png"
+                imgs.append(
+                    f'<img src="data:{ct};base64,{b64}" '
+                    f'style="max-width:100%;display:block;margin:6px auto"/>')
+            except Exception:  # noqa: BLE001
+                continue
+        text = "".join((r.text or "") for r in p.runs)
+        if not text.strip() and not imgs:
+            return ""
+        style = (p.style.name or "") if p.style else ""
+        cls = "h" if ("Heading" in style or style.startswith("标题")) else "p"
+        return f'<p class="{cls}">{text}{"".join(imgs)}</p>'
+
+    def table_html(tbl) -> str:
+        rows = []
+        for row in tbl.rows:
+            cells = "".join(f"<td>{_esc(c.text)}</td>" for c in row.cells)
+            rows.append(f"<tr>{cells}</tr>")
+        return f"<table>{''.join(rows)}</table>"
+
+    for child in doc.element.body.iterchildren():
+        if child.tag == qn("w:p"):
+            h = para_html(Paragraph(child, doc))
+            if h:
+                out.append(h)
+        elif child.tag == qn("w:tbl"):
+            out.append(table_html(Table(child, doc)))
+    return "\n".join(out)
+
+
+def _highlight_needs_human(html: str, issues: list) -> str:
+    """给引用某章节号的问题，把对应段落的 <p> 加 needs-human 类 + 标题提示。"""
+    sec_map = {}
+    for iss in issues or []:
+        detail = str(iss.get("detail") or "")
+        m = re.search(r"(\d+(?:\.\d+){1,3})", detail)
+        if m:
+            sec_map.setdefault(m.group(1), []).append(detail)
+    if not sec_map:
+        return html
+
+    def _esc_attr(s: str) -> str:
+        return s.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
+
+    out = []
+    for line in html.split("\n"):
+        if line.startswith("<p"):
+            for sec, dets in sec_map.items():
+                if sec in line:
+                    title = "；".join(dets)[:120]
+                    line = re.sub(
+                        r"^<p\b([^>]*)>",
+                        lambda m, t=title: (
+                            f'<p{m.group(1)} class="needs-human" '
+                            f'title="{_esc_attr(t)}">'),
+                        line, count=1)
+                    break
+        out.append(line)
+    return "\n".join(out)
+
+
+@app.route("/api/bridges/<bridge_id>/reports/<path:filename>/preview")
+def api_bridge_report_preview(bridge_id, filename):
+    auth = _require_token()
+    if auth:
+        return auth
+    cfg = _config_for(bridge_id)
+    if not cfg or "error" in cfg:
+        return jsonify({"error": "配置不可用"}), 404
+    out_dir = cfg.get("output_dir", "")
+    safe = os.path.basename(filename)
+    path = os.path.join(out_dir, safe)
+    if not os.path.isfile(path) or not safe.lower().endswith(".docx"):
+        return jsonify({"error": "文件不存在"}), 404
+
+    issues = []
+    logs_dir = os.path.join(os.path.dirname(os.path.abspath(out_dir or ".")), "logs")
+    label = ""
+    m = re.search(r"(\d{4}\.\d+~\d+|\d{4}年)", safe)
+    if m:
+        label = m.group(1)
+    if os.path.isdir(logs_dir):
+        cands = [os.path.join(logs_dir, f"review_report_{label}.json")]
+        cands += sorted(
+            [os.path.join(logs_dir, fn) for fn in os.listdir(logs_dir)
+             if fn.startswith("review_report_") and fn.endswith(".json")],
+            key=os.path.getmtime, reverse=True)
+        for rp in cands:
+            if not os.path.isfile(rp):
+                continue
+            try:
+                with open(rp, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                final = data.get("final") or {}
+                issues = [
+                    i for i in (final.get("issues") or [])
+                    if i.get("needs_human") in (True, "true", "True")
+                ]
+                if issues or data.get("final") is not None:
+                    break
+            except Exception:  # noqa: BLE001
+                continue
+
+    try:
+        html = _docx_to_html(path)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": f"预览生成失败: {exc}"}), 500
+    html = _highlight_needs_human(html, issues)
+    return jsonify({
+        "html": html,
+        "issues": issues,
+        "needs_human_count": len(issues),
+    })
 
 
 @app.route("/api/bridges/<bridge_id>/charts/<path:filename>")

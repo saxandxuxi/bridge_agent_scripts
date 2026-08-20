@@ -124,9 +124,15 @@ class ReportReviewer:
     # ------------------------------------------------------------------
     def review_report(self, source_text: str, report_text: str,
                       lineage_digest: str = "",
-                      table_warnings: str = "") -> Dict:
-        """审查生成的报告，返回 {"ok", "issues", "raw"}。"""
-        result = {"ok": True, "issues": [], "raw": ""}
+                      table_warnings: str = "",
+                      chart_index: str = "",
+                      prior_issues: str = "") -> Dict:
+        """审查生成的报告，返回 {"ok", "issues", "repairs", "raw"}。
+
+        repairs 是机器可执行的修复清单（供 repairer 逐条“验证后落地”），
+        issues 是给人看的问题清单，二者可同时存在。
+        """
+        result = {"ok": True, "issues": [], "repairs": [], "raw": ""}
         if not self.available():
             log.info("LLM 不可用，跳过报告审查")
             return result
@@ -134,20 +140,31 @@ class ReportReviewer:
             log.info("报告文本为空，跳过报告审查")
             return result
         system = (
-            "你是桥梁健康监测报告质量审查专家。对照成品报告原文，审查“生成的报告”"
-            "是否存在错误，只输出 JSON：{\"issues\": [{\"type\": \"...\", "
-            "\"detail\": \"...\"}]}，没有问题输出 {\"issues\": []}。\n"
-            "重点审查：\n"
+            "你是桥梁健康监测报告质量审查专家。对照成品报告原文与真实监测数据"
+            "（数据链路摘要），审查“生成的报告”是否存在错误。\n"
+            "只输出 JSON：{\"issues\": [{\"type\": \"...\", \"detail\": \"...\", "
+            "\"needs_human\": true/false}], \"repairs\": [{\"type\": \"...\", "
+            "\"target\": \"...\", \"hint\": \"...\", \"reason\": \"...\"}]}；"
+            "没有问题输出 {\"issues\": [], \"repairs\": []}。\n"
+            "重点审查（issues.type 取值：table_duplicate / index_wrong / "
+            "image_wrong / stat_logic / unit_wrong / summary_stale / "
+            "period_mismatch / other）：\n"
             "1) 表格：是否有重复的列或重复的行；单元格数值是否张冠李戴（如右幅行填了"
-            "左幅数据）。type=table_duplicate 或 index_wrong。\n"
-            "2) 图片：图注/章节是否左右幅、上下游、位置错配；同一张图是否被重复插入。"
-            "type=image_wrong。\n"
-            "3) 统计逻辑：湿度等百分数不应超过 100（如 112% 一定错）；温度/应变等"
+            "左幅数据）。\n"
+            "2) 图片：图本身是否左右幅/上下游/位置错配，或同一张图被重复插入。"
+            "若图片是对的、只是图片下方或正文里的“配图说明文字”写错（如标题是3#墩、"
+            "配图说明却写2#墩），不要报 image_wrong，而是输出 caption 修复："
+            "type=caption、target=错的图注原文片段（用于定位删除）、hint=正确文字或"
+            "“删除”。\n"
+            "3) 方位语义：桥跨地名方位（炎陵侧/汝城侧/随州侧/湘潭侧/吉首侧等）可与"
+            "截面方位（上游/下游/左幅/右幅/顶板/底板）叠加共存，语义一致即可，不要"
+            "因为“上游+炎陵侧”同时出现就报冲突；只有当真正的截面方位（左幅↔右幅、"
+            "上游↔下游、顶板↔底板）与表格/数据矛盾时才报 index_wrong/image_wrong。\n"
+            "4) 统计逻辑：湿度等百分数不应超过 100（如 112% 一定错）；温度/应变等"
             "不应出现明显反物理的值；表格里“最大值”必须不小于“最小值”，“平均值”必须"
-            "落在 [最小值, 最大值] 闭区间内；“差值/极差”应为非负。type=stat_logic。\n"
-            "4) 单位：数值单位是否写错（如 m/s² 落在句号外、%与℃混用）。type=unit_wrong。\n"
-            "5) 单位空格：数值和单位之间不能有多余空格（如“5.5  m/s²”“6.9m/s² ”）。"
-            "type=unit_wrong。\n"
+            "落在 [最小值, 最大值] 闭区间内；“差值/极差”应为非负。\n"
+            "5) 单位：数值单位是否写错（如 m/s² 落在句号外、%与℃混用）；数值和单位"
+            "之间不能有多余空格（如“5.5  m/s²”“6.9m/s² ”）。type=unit_wrong。\n"
             "6) 总结段落：结论里的统计值是否和报告正文/表格不一致；是否照抄成品报告"
             "里的旧数值(应从数据重算，不能直接回填原文)；是否在同一句里把“最高/最低”"
             "极值重复输出两遍且数值口径不一致(如先写最高43.3℃、后面又写最高43.2758℃)。"
@@ -159,23 +176,43 @@ class ReportReviewer:
             "不能出现 Z 方向复用 Y 方向位置。type=index_wrong。\n"
             "9) 报告期：标题/页眉/正文的季度或年份是否和声明报告期一致。"
             "type=period_mismatch。\n"
-            "type 取值：table_duplicate / index_wrong / image_wrong / stat_logic / "
-            "unit_wrong / summary_stale / period_mismatch / other。"
-            "detail 用简短中文说明具体位置和问题，能引用数值就引用。"
+            "10) 结论与真实数据一致性（双向）：原文/结论说某位置“正常”，但数据链路"
+            "摘要显示该位置有恒0故障、缺失天数>0或缺失小时数达到阈值，必须报 "
+            "summary_stale 并给 summary 修复；反之原文说某位置“异常/故障”，但数据"
+            "显示正常，也必须按真实数据纠正。\n"
+            "issues.needs_human：仅当“缺少该类型图/统计值/数据/特征，或图库图本身"
+            "不合要求、无法通过重新索引/重算纠正”时为 true，其余为 false。\n"
+            "repairs.type 取值：chart（重索引图片）、caption（删除/改正错误图注）、"
+            "stat（重算统计值）、cell（重算单元格）、summary（重生成总结润色）、"
+            "unit（单位/空格规范化）。\n"
+            "repairs.target：chart 用图表索引表里的 chart_id；caption 用错的图注原文"
+            "片段；stat/cell 用占位符或“对应测点/位置”所在指标；summary 用指标名。\n"
+            "repairs.hint：正确的监测位置/方向/特征，或 caption 的正确文字（删除则"
+            "写“删除”）。能确定才输出 repair，不确定不要瞎编。\n"
+            "detail/reason 用简短中文说明具体位置和问题，能引用数值就引用。"
         )
-        user = (
-            "【成品报告原文】\n" + (source_text or "（无）")[:30000]
-            + "\n\n【生成的报告】\n" + report_text[:40000]
-            + ("\n\n【数据链路摘要（未找到/回退项）】\n" + lineage_digest
-               if lineage_digest else "")
-            + ("\n\n【规则式填表校验告警】\n" + table_warnings
-               if table_warnings else "")
-        )
+        parts = [
+            "【成品报告原文】\n" + (source_text or "（无）")[:30000],
+            "【生成的报告】\n" + report_text[:40000],
+        ]
+        if lineage_digest:
+            parts.append("【数据链路摘要（未找到/回退项）】\n" + lineage_digest)
+        if table_warnings:
+            parts.append("【规则式填表校验告警】\n" + table_warnings)
+        if chart_index:
+            parts.append("【图表索引表（chart_id→图注→位置，供 chart/caption 修复定位）】\n"
+                         + chart_index)
+        if prior_issues:
+            parts.append("【上一轮已发现问题（本轮判断是否已解决、解决是否正确）】\n"
+                         + prior_issues)
+        user = "\n\n".join(parts)
         data = self._ask_json(system, user)
         result["raw"] = json.dumps(data, ensure_ascii=False) if data else ""
         if isinstance(data, dict):
             issues = data.get("issues") or []
             result["issues"] = [i for i in issues if isinstance(i, dict)]
+            repairs = data.get("repairs") or []
+            result["repairs"] = [r for r in repairs if isinstance(r, dict)]
             result["ok"] = not result["issues"]
         else:
             result["ok"] = True

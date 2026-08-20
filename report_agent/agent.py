@@ -487,104 +487,164 @@ class ReportAgent:
             )
         out_path = os.path.join(self.cfg.get("output_dir", "outputs"), out_name)
         repair_stats = {}
-        unfilled = report_builder.build_report(
-            template_path=self.cfg.get("template", ""),
-            output_path=out_path,
-            resolver=resolver,
-            chart_images=chart_images,
-            row_datasets=row_datasets,
-            chart_width_inches=float(charts_cfg.get("width_inches", 5.8)),
-            strict=True,
-            period=period,
-            chart_captions=chart_captions,
-            extra_charts=extra_charts,
-            text_replace=bridge_cfg.get("text_replace") or None,
-            repair_stats=repair_stats,
-        )
+        from .reviewer import ReportReviewer, _read_docx_text, self_check_report
+        from .repairer import ReportRepairer
 
-        # 数据链路日志：每个填入数值的来源与计算链（找不到的会标“未找到”）
-        verify_warns = []
-        if lineage:
-            out_dir_abs = os.path.abspath(self.cfg.get("output_dir", "outputs"))
-            logs_dir = os.path.join(
-                os.path.dirname(out_dir_abs),
-                "logs",
-            )
-            lineage_path = report_builder._write_data_lineage(
-                lineage, logs_dir, period)
-            log.info("数据链路日志已写出: %s（%d 条，未找到 %d 条）",
-                     lineage_path, len(lineage),
-                     sum(1 for e in lineage if e.get("结果") == "未找到"))
-            # 填表校验：整列未解析 / 整列同值 告警
-            try:
-                verify_warns = report_builder.verify_table_columns(
-                    out_path, lineage=lineage, logs_dir=logs_dir,
-                    label=period.get("label") or "report")
-                if verify_warns:
-                    log.warning("填表校验发现问题 %d 处（详见 verify_tables_%s.log）",
-                                len(verify_warns), period.get("label"))
-            except Exception as exc:  # noqa: BLE001
-                log.warning("填表校验失败: %s", exc)
-        else:
-            lineage_path = ""
-
-        # LLM 报告审查：对照成品原文，检查表格/索引/图片/统计逻辑/总结段落
-        report_review = None
+        # 成品报告原文：既给审查做对照，也给总结润色做“原文 vs 真实数据”对照
+        source_text = ""
         try:
-            from .reviewer import ReportReviewer, _read_docx_text
-            reviewer = ReportReviewer(self.cfg.get("llm"))
-            if reviewer.available():
-                # 数据链路摘要：只给“未找到/回退”项，避免把整份链路塞给 LLM
-                missed = [e for e in lineage if e.get("结果") in ("未找到", "回退")]
+            source_text = _read_docx_text(self.cfg.get("source_report", ""))
+        except Exception:  # noqa: BLE001
+            source_text = ""
+        if bridge is not None:
+            bridge._source_text = source_text
+
+        # 图表索引表：chart_id -> 图注 -> 位置，供 LLM 命名 chart/caption 修复目标
+        chart_index_str = ""
+        if bridge is not None:
+            lines = []
+            for cid in chart_images:
+                pos = (bridge._position_for_sensor(
+                    chart_sensors.get(cid, "")) if hasattr(
+                        bridge, "_position_for_sensor") else "") or ""
+                lines.append(f"{cid} | {chart_captions.get(cid, '')} | {pos}")
+            chart_index_str = "\n".join(lines)
+
+        max_rounds = int((self.cfg.get("review", {}) or {}).get("max_rounds", 3) or 3)
+        caption_removals: List[str] = []
+        caption_replacements: Dict[str, str] = {}
+        report_review = None
+        self_check: List[Dict] = []
+        rounds_log: List[Dict] = []
+        repair_log: List[Dict] = []
+        prior_issues_json = ""
+        reviewer = ReportReviewer(self.cfg.get("llm"))
+        out_dir_abs = os.path.abspath(self.cfg.get("output_dir", "outputs"))
+        logs_dir = os.path.join(os.path.dirname(out_dir_abs), "logs")
+        os.makedirs(logs_dir, exist_ok=True)
+
+        for rnd in range(1, max_rounds + 1):
+            lineage.clear()
+            unfilled = report_builder.build_report(
+                template_path=self.cfg.get("template", ""),
+                output_path=out_path,
+                resolver=resolver,
+                chart_images=chart_images,
+                row_datasets=row_datasets,
+                chart_width_inches=float(charts_cfg.get("width_inches", 5.8)),
+                strict=True,
+                period=period,
+                chart_captions=chart_captions,
+                extra_charts=extra_charts,
+                text_replace=bridge_cfg.get("text_replace") or None,
+                caption_removals=caption_removals,
+                caption_replacements=caption_replacements,
+                repair_stats=repair_stats,
+            )
+
+            # 数据链路 + 填表校验（供审查对照）
+            verify_warns = []
+            lineage_digest = ""
+            table_warnings = ""
+            if lineage:
+                report_builder._write_data_lineage(lineage, logs_dir, period)
+                try:
+                    verify_warns = report_builder.verify_table_columns(
+                        out_path, lineage=lineage, logs_dir=logs_dir,
+                        label=period.get("label") or "report")
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("填表校验失败: %s", exc)
+                missed = [e for e in lineage
+                          if e.get("结果") in ("未找到", "回退")]
                 lineage_digest = json.dumps(
                     missed[:200], ensure_ascii=False, default=str)
                 table_warnings = json.dumps(
                     verify_warns[:100], ensure_ascii=False, default=str)
-                report_review = reviewer.review_report(
-                    _read_docx_text(self.cfg.get("source_report", "")),
-                    _read_docx_text(out_path),
+
+            # LLM 审查
+            review = None
+            if reviewer.available():
+                review = reviewer.review_report(
+                    source_text, _read_docx_text(out_path),
                     lineage_digest=lineage_digest,
                     table_warnings=table_warnings,
+                    chart_index=chart_index_str,
+                    prior_issues=prior_issues_json,
                 )
-                n_issues = len(report_review.get("issues", []))
+                n_issues = len(review.get("issues", []))
                 if n_issues:
-                    log.warning("报告审查发现 %d 处问题", n_issues)
-                    for iss in report_review.get("issues", []):
-                        log.warning("  - [%s] %s",
-                                    iss.get("type", "other"),
+                    log.warning("第 %d 轮审查发现 %d 处问题", rnd, n_issues)
+                    for iss in review.get("issues", []):
+                        log.warning("  - [%s] %s", iss.get("type", "other"),
                                     iss.get("detail", ""))
                 else:
-                    log.info("报告审查完成：未发现问题")
-                out_dir_abs = os.path.abspath(self.cfg.get("output_dir", "outputs"))
-                logs_dir = os.path.join(os.path.dirname(out_dir_abs), "logs")
-                os.makedirs(logs_dir, exist_ok=True)
-                review_path = os.path.join(
-                    logs_dir, f"review_report_{period.get('label') or 'report'}.json")
-                with open(review_path, "w", encoding="utf-8") as f:
-                    json.dump(report_review, f, ensure_ascii=False, indent=2)
-                log.info("报告审查结果已保存: %s", review_path)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("报告审查异常（不影响报告生成）: %s", exc)
+                    log.info("第 %d 轮审查完成：未发现问题", rnd)
 
-        # 确定性体检（不依赖 LLM，兜住数值逻辑/重复行/单位空格等硬错误）
-        self_check = []
+            # 确定性体检
+            sc = []
+            try:
+                sc = self_check_report(out_path)
+                if sc:
+                    log.warning("第 %d 轮确定性体检发现 %d 处问题",
+                                rnd, len(sc))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("确定性体检失败: %s", exc)
+
+            rounds_log.append({"round": rnd, "review": review,
+                               "self_check": sc})
+            report_review = review
+            self_check = sc
+
+            # 应用结构化修复（验证后落地），有实际落地才继续下一轮
+            repairs = (review or {}).get("repairs", []) if review else []
+            if not repairs or bridge is None:
+                break
+            rp = ReportRepairer(
+                bridge, chart_images, chart_captions,
+                chart_sensors, chart_kinds, period).apply(repairs)
+            repair_log.append(rp)
+            caption_removals.extend(rp.get("caption_removals", []))
+            caption_replacements.update(rp.get("caption_replacements", {}))
+            prior_issues_json = json.dumps(
+                (review or {}).get("issues", []), ensure_ascii=False,
+                default=str)
+            if rp.get("applied"):
+                log.info("第 %d 轮自动修复 %d 处，进入下一轮复审",
+                         rnd, len(rp.get("applied", [])))
+                continue
+            break
+
+        # 审查/修复完整记录落盘，web 面板可看每轮与最终待人工项
+        review_path = os.path.join(
+            logs_dir, f"review_report_{period.get('label') or 'report'}.json")
         try:
-            from .reviewer import self_check_report
-            self_check = self_check_report(out_path)
-            if self_check:
-                log.warning("确定性体检发现 %d 处问题", len(self_check))
-                for iss in self_check:
-                    log.warning("  - [%s] %s",
-                                iss.get("type", "other"), iss.get("detail", ""))
+            with open(review_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "period": {k: (str(v) if hasattr(v, "isoformat")
+                                   else v) for k, v in period.items()},
+                    "rounds": rounds_log,
+                    "repairs": repair_log,
+                    "max_rounds": max_rounds,
+                    "final": report_review,
+                    "self_check": self_check,
+                }, f, ensure_ascii=False, indent=2, default=str)
+            log.info("报告审查/修复记录已保存: %s", review_path)
         except Exception as exc:  # noqa: BLE001
-            log.warning("确定性体检失败: %s", exc)
+            log.warning("报告审查记录保存失败: %s", exc)
 
+        needs_human_issues = [
+            iss for iss in (report_review or {}).get("issues", [])
+            if iss.get("needs_human") in (True, "true", "True")
+        ]
         repair = {
             "auto_fixed": repair_stats.get("spaces_collapsed", 0),
-            "manual_needed": ((len(report_review.get("issues", []))
-                               if report_review else 0) + len(self_check)),
+            "manual_needed": len(needs_human_issues) + len(self_check),
             "llm_called": report_review is not None,
             "llm_ok": bool(report_review and report_review.get("raw")),
+            "rounds": len(rounds_log),
+            "repairs_applied": sum(len(r.get("applied", []))
+                                  for r in repair_log),
+            "needs_human": needs_human_issues,
         }
 
         summary = {

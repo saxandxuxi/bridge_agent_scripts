@@ -57,6 +57,20 @@
   .muted { color: var(--dim); font-size: 12px; }
   .right { margin-left: auto; }
   .green { color: var(--ok); } .red { color: var(--bad); } .yellow { color: var(--warn); }
+  .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; z-index: 50; }
+  .modal-mask.show { display: flex; align-items: stretch; justify-content: center; }
+  .modal { background: var(--card); border: 1px solid var(--line); border-radius: 12px; width: min(1100px, 96vw); height: 92vh; margin: 2vh auto; display: flex; flex-direction: column; }
+  .modal-head { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+  .modal-body { flex: 1; display: flex; overflow: hidden; }
+  .pv-side { width: 300px; border-right: 1px solid var(--line); overflow: auto; padding: 12px; }
+  .pv-doc { flex: 1; overflow: auto; background: #fff; color: #111; padding: 24px 34px; }
+  .pv-doc p { margin: 6px 0; line-height: 1.6; }
+  .pv-doc p.h { font-weight: 700; margin-top: 14px; }
+  .pv-doc table { border-collapse: collapse; width: 100%; margin: 8px 0; color: #111; }
+  .pv-doc td, .pv-doc th { border: 1px solid #cbd5e1; padding: 4px 8px; font-size: 12px; }
+  .pv-doc p.needs-human { background: #fff7d6; border-left: 4px solid #f59e0b; padding-left: 8px; cursor: help; }
+  .issue-item { background: var(--card2); border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin-bottom: 8px; font-size: 12px; }
+  .issue-item .t { color: var(--warn); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -573,10 +587,39 @@ function loadReports() {
     r.reports.forEach(function (f) {
       var tr = document.createElement("tr");
       tr.innerHTML = "<td>" + esc(f.name) + "</td><td>" + Math.round(f.size / 1024) + " KB</td><td>" + esc(f.mtime) + "</td>" +
-        '<td><a href="/api/bridges/' + bridgeId + '/reports/' + encodeURIComponent(f.name) + q + '">下载</a></td>';
+        '<td><button class="ghost" style="padding:3px 9px" onclick="previewReport(\'' + bridgeId + '\',\'' + esc(f.name).replace(/'/g, "\\'") + '\')">预览</button> ' +
+        '<a href="/api/bridges/' + bridgeId + '/reports/' + encodeURIComponent(f.name) + q + '">下载</a></td>';
       tbody.appendChild(tr);
     });
   }).catch(function (e) { showMsg(String(e), "err"); });
+}
+
+function previewReport(bridgeId, name) {
+  $("pvMask").classList.add("show");
+  $("pvTitle").textContent = name;
+  $("pvCount").textContent = "";
+  $("pvDoc").innerHTML = '<p class="muted">加载中…</p>';
+  $("pvSide").innerHTML = "";
+  api("/api/bridges/" + bridgeId + "/reports/" + encodeURIComponent(name) + "/preview")
+    .then(function (r) {
+      $("pvDoc").innerHTML = r.html || '<p class="muted">（无内容）</p>';
+      $("pvCount").textContent = r.needs_human_count ? "需人工处理 " + r.needs_human_count + " 处" : "无人工待办";
+      var side = "";
+      (r.issues || []).forEach(function (i, idx) {
+        side += '<div class="issue-item"><span class="t">[' + esc(i.type) + ']</span> ' +
+          esc(i.detail || "") + "</div>";
+      });
+      $("pvSide").innerHTML = side || '<p class="muted">无人工待办问题</p>';
+    })
+    .catch(function (e) {
+      $("pvDoc").innerHTML = '<p class="muted">预览失败：' + esc(String(e)) + "</p>";
+    });
+}
+
+function closePreview() {
+  $("pvMask").classList.remove("show");
+  $("pvDoc").innerHTML = "";
+  $("pvSide").innerHTML = "";
 }
 
 function loadPreprocessConfig() {
@@ -1132,5 +1175,19 @@ api("/api/status").then(function (st) {
   loadBridges();
 }).catch(function () { loadBridges(); });
 </script>
+<div id="pvMask" class="modal-mask">
+  <div class="modal">
+    <div class="modal-head">
+      <b id="pvTitle">报告预览</b>
+      <span class="muted" id="pvCount"></span>
+      <span class="spacer"></span>
+      <button class="ghost" onclick="closePreview()">关闭</button>
+    </div>
+    <div class="modal-body">
+      <div class="pv-side" id="pvSide"></div>
+      <div class="pv-doc" id="pvDoc"></div>
+    </div>
+  </div>
+</div>
 </body>
 </html>

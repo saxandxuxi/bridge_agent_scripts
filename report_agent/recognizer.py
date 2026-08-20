@@ -1838,17 +1838,35 @@ def _chart_block_locations(paragraph, cell_ref_paras: Dict[int, tuple],
                 if composed not in out:
                     out.append(composed)
             return out
-    # 节标题方位词补全：标题带“上游侧/下游侧”等方位，而表格位置未带时，
-    # 把方位词拼进位置（湘江：3.1.1.1上游侧箱梁内环境温度 + 表“随州侧边跨跨中截面”
-    # → “随州侧边跨跨中截面上游”），否则运行时图库/名称对照匹配不到。
+    # 节标题方位词补全：标题/描述行带“上游/下游/左幅/右幅/左侧/右侧”等方位，
+    # 而表格位置未带时，把方位词拼进位置（湘江：3.1.1.1上游侧箱梁内环境温度 +
+    # 表“随州侧边跨跨中截面” → “随州侧边跨跨中截面上游”；洣水河：
+    # “3.1.2.2右幅截面湿度监测”+“炎陵侧边跨跨中截面” → “炎陵侧边跨跨中截面右幅”），
+    # 否则运行时图库/名称对照匹配不到左右幅。
     if heading_paras and texts:
         heading_dir = ""
         for hp in reversed(heading_paras):
             if hp < paragraph:
                 ht = str(texts[hp])
                 # 只取最近的节标题；若它本身没有方位词，就不继续往回找
-                heading_dir = next((w for w in ("上游", "下游") if w in ht), "")
+                heading_dir = next(
+                    (w for w in ("上游", "下游", "左幅", "右幅",
+                                 "上游侧", "下游侧", "左侧", "右侧")
+                     if w in ht), "")
                 break
+        if not heading_dir:
+            # 标题没带方位时，看图表块描述行（“…右幅截面环境湿度监测曲线图…
+            # 如下图所示：”）
+            for pi in range(paragraph - 1, max(paragraph - 5, -1), -1):
+                t = str(texts[pi]) if 0 <= pi < len(texts) else ""
+                if "如下图所示" not in t and "下图" not in t:
+                    continue
+                heading_dir = next(
+                    (w for w in ("上游", "下游", "左幅", "右幅",
+                                 "上游侧", "下游侧", "左侧", "右侧")
+                     if w in t), "")
+                if heading_dir:
+                    break
         if heading_dir:
             uniq = [r if heading_dir in r else r + heading_dir for r in uniq]
     return uniq

@@ -683,32 +683,30 @@ function loadConfig() {
   }).catch(function (e) { showMsg(String(e), "err"); });
 }
 
+var LLM_PROVIDERS = {
+  qwen: { label: "通义千问 QWEN", model: "qwen-plus" },
+  zhipu: { label: "智谱 GLM", model: "glm-4-flash" },
+  deepseek: { label: "DeepSeek", model: "deepseek-chat" },
+  moonshot: { label: "Kimi / Moonshot", model: "moonshot-v1-8k" }
+};
+
 function loadLlmProviders(current) {
-  var bridgeId = $("cfgBridge").value;
-  if (!bridgeId) return;
-  api("/api/bridges/" + bridgeId + "/llm/providers").then(function (r) {
-    var sel = $("cfgLlmProvider");
-    var old = sel.value;
-    sel.innerHTML = '<option value="">请选择供应商</option>';
-    Object.keys(r.providers || {}).forEach(function (k) {
-      var p = r.providers[k];
-      var opt = document.createElement("option");
-      opt.value = k;
-      opt.textContent = p.label + "（" + p.model + "）";
-      sel.appendChild(opt);
-    });
-    sel.value = current || old;
-    if (sel.value) applyLlmProvider(sel.value);
-  }).catch(function (e) { showMsg("加载 LLM 供应商失败：" + String(e), "err"); });
+  var sel = $("cfgLlmProvider");
+  sel.innerHTML = '<option value="">请选择供应商</option>';
+  Object.keys(LLM_PROVIDERS).forEach(function (k) {
+    var p = LLM_PROVIDERS[k];
+    var opt = document.createElement("option");
+    opt.value = k;
+    opt.textContent = p.label + "（" + p.model + "）";
+    sel.appendChild(opt);
+  });
+  if (current) sel.value = current;
+  if (sel.value) applyLlmProvider(sel.value);
 }
 
 function applyLlmProvider(prov) {
-  var bridgeId = $("cfgBridge").value;
-  if (!prov || !bridgeId) return;
-  api("/api/bridges/" + bridgeId + "/llm/providers").then(function (r) {
-    var p = (r.providers || {})[prov];
-    if (p) $("cfgLlmModel").value = p.model;
-  }).catch(function () {});
+  var p = LLM_PROVIDERS[prov];
+  if (p) $("cfgLlmModel").value = p.model;
 }
 $("cfgLlmProvider").addEventListener("change", function () {
   applyLlmProvider($("cfgLlmProvider").value);

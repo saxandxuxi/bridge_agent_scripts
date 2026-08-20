@@ -530,6 +530,19 @@ class ReportAgent:
         except Exception as exc:  # noqa: BLE001
             log.warning("报告审查异常（不影响报告生成）: %s", exc)
 
+        # 确定性体检（不依赖 LLM，兜住数值逻辑/重复行/单位空格等硬错误）
+        self_check = []
+        try:
+            from .reviewer import self_check_report
+            self_check = self_check_report(out_path)
+            if self_check:
+                log.warning("确定性体检发现 %d 处问题", len(self_check))
+                for iss in self_check:
+                    log.warning("  - [%s] %s",
+                                iss.get("type", "other"), iss.get("detail", ""))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("确定性体检失败: %s", exc)
+
         summary = {
             "output": out_path,
             "period": {
@@ -549,6 +562,7 @@ class ReportAgent:
             "missing_cells": missing_sinks[:500],
             "chart_gaps": chart_gaps if bridge is not None else [],
             "review": report_review,
+            "self_check": self_check,
         }
         # 生成结束后刷新桥数据状态，让 match_stats 反映本次运行的实际命中情况
         if bridge is not None:

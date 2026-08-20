@@ -1109,11 +1109,40 @@ def build_report(
             _set_auto_line_spacing(pa)
     if text_replace:
         _apply_text_replacements(doc, text_replace)
+    _collapse_extra_spaces(doc)
     doc.save(output_path)
     rgb_n = _flatten_rgba_in_docx(output_path)
     if rgb_n:
         log.info("输出文档 RGBA 图片转 RGB：%d 张", rgb_n)
     return unfilled
+
+
+def _collapse_extra_spaces(doc) -> int:
+    """把段落/表格里连续的 ASCII 空格(2 个及以上)收成 1 个。
+
+    修复“5.5  m/s²”“6.9m/s² ”这类数值与单位之间的多余空格；只动 run 级
+    文本，不改其它排版。返回修改的 run 数。
+    """
+    fixed = 0
+
+    def _fix_para(pa):
+        nonlocal fixed
+        for r in getattr(pa, "runs", []):
+            t = r.text or ""
+            if "  " in t:
+                r.text = re.sub(r" {2,}", " ", t)
+                fixed += 1
+
+    for pa in _walk_paragraphs(doc):
+        _fix_para(pa)
+    for tb in doc.tables:
+        for row in tb.rows:
+            for cell in row.cells:
+                for pa in _walk_paragraphs(cell):
+                    _fix_para(pa)
+    if fixed:
+        log.info("收尾修补：%d 处多余连续空格已归一", fixed)
+    return fixed
 
 
 def _write_data_lineage(lineage: List[Dict], logs_dir: str, period: Dict) -> str:

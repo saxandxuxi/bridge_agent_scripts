@@ -977,6 +977,7 @@ def build_report(
     chart_captions: Optional[Dict[str, str]] = None,
     extra_charts: Optional[Dict[str, List[Dict]]] = None,
     text_replace: Optional[Dict[str, str]] = None,
+    repair_stats: Optional[Dict] = None,
 ) -> List[str]:
     """基于模板生成报告，返回未替换的占位符列表（strict=True 时抛出异常）。"""
     doc = Document(template_path)
@@ -1109,7 +1110,10 @@ def build_report(
             _set_auto_line_spacing(pa)
     if text_replace:
         _apply_text_replacements(doc, text_replace)
-    _collapse_extra_spaces(doc)
+    _n_fixed = _collapse_extra_spaces(doc)
+    if repair_stats is not None:
+        repair_stats["spaces_collapsed"] = repair_stats.get(
+            "spaces_collapsed", 0) + _n_fixed
     doc.save(output_path)
     rgb_n = _flatten_rgba_in_docx(output_path)
     if rgb_n:

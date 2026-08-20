@@ -1358,6 +1358,128 @@ def api_bridge_run_status(bridge_id):
     return jsonify({"running": st, "last_run": last_run})
 
 
+@app.route("/api/bridges/<bridge_id>/review")
+def api_bridge_review(bridge_id):
+    """审查问题面板数据：LLM 报告审查 + 确定性体检 + 模板审查。"""
+    auth = _require_token()
+    if auth:
+        return auth
+    cfg = _config_for(bridge_id)
+    if not cfg or "error" in cfg:
+        return jsonify({"error": "配置不可用"}), 404
+    out_dir = cfg.get("output_dir", "")
+    logs_dir = os.path.join(os.path.dirname(os.path.abspath(out_dir or ".")),
+                            "logs")
+    analysis_dir = os.path.join(ROOT, "outputs", "analysis")
+
+    # 1) 最近一次报告运行：review / self_check / repair
+    last_run = {}
+    lr_path = os.path.join(out_dir, "last_run.json")
+    if os.path.isfile(lr_path):
+        try:
+            with open(lr_path, "r", encoding="utf-8") as f:
+                last_run = json.load(f)
+        except Exception:  # noqa: BLE001
+            last_run = {}
+
+    # 2) 报告审查独立 JSON（outputs/logs/review_report_<期>.json，取最新）
+    report_reviews = []
+    if os.path.isdir(logs_dir):
+        for fn in sorted(os.listdir(logs_dir)):
+            if not (fn.startswith("review_report_") and fn.endswith(".json")):
+                continue
+            p = os.path.join(logs_dir, fn)
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                report_reviews.append({
+                    "file": os.path.relpath(p, ROOT).replace("\\", "/"),
+                    "name": fn,
+                    "mtime": dt.datetime.fromtimestamp(
+                        os.path.getmtime(p)).isoformat(timespec="seconds"),
+                    "ok": data.get("ok", True),
+                    "issues": data.get("issues", []),
+                    "raw": (data.get("raw") or "")[:2000],
+                })
+            except Exception:  # noqa: BLE001
+                continue
+    report_reviews.sort(key=lambda x: x["mtime"], reverse=True)
+
+    # 3) 模板审查 JSON（outputs/analysis/review_template_<报告名>.json，
+    #    优先匹配本桥 source_report 文件名，否则取最新）
+    template_reviews = []
+    if os.path.isdir(analysis_dir):
+        stem = ""
+        src = cfg.get("source_report", "")
+        if src:
+            stem = os.path.splitext(os.path.basename(src))[0]
+        for fn in sorted(os.listdir(analysis_dir)):
+            if not (fn.startswith("review_template_") and fn.endswith(".json")):
+                continue
+            if stem and not fn.startswith(f"review_template_{stem}"):
+                continue
+            p = os.path.join(analysis_dir, fn)
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                template_reviews.append({
+                    "file": os.path.relpath(p, ROOT).replace("\\", "/"),
+                    "name": fn,
+                    "mtime": dt.datetime.fromtimestamp(
+                        os.path.getmtime(p)).isoformat(timespec="seconds"),
+                    "ok": data.get("ok", True),
+                    "issues": data.get("issues", []),
+                    "raw": (data.get("raw") or "")[:2000],
+                })
+            except Exception:  # noqa: BLE001
+                continue
+    template_reviews.sort(key=lambda x: x["mtime"], reverse=True)
+
+    # 4) LLM 是否可用（决定审查是否真的调用了大模型）
+    llm = cfg.get("llm", {}) or {}
+    llm_available = bool(llm.get("enabled")) and bool(
+        llm.get("api_key") or os.environ.get("QWEN_API_KEY")
+        or os.environ.get("DASHSCOPE_API_KEY"))
+
+    return jsonify({
+        "bridge_id": bridge_id,
+        "llm_available": llm_available,
+        "last_run": {
+            "period": last_run.get("period"),
+            "output": last_run.get("output"),
+            "review": last_run.get("review"),
+            "self_check": last_run.get("self_check"),
+            "repair": last_run.get("repair"),
+        },
+        "report_reviews": report_reviews,
+        "template_reviews": template_reviews,
+        "logs_dir": os.path.relpath(logs_dir, ROOT).replace("\\", "/"),
+    })
+
+
+@app.route("/api/bridges/<bridge_id>/review-file")
+def api_bridge_review_file(bridge_id):
+    """下载审查 JSON（review_report_*.json / review_template_*.json）。"""
+    auth = _require_token()
+    if auth:
+        return auth
+    cfg = _config_for(bridge_id)
+    if not cfg or "error" in cfg:
+        return jsonify({"error": "配置不可用"}), 404
+    name = os.path.basename(str(request.args.get("name") or ""))
+    if not (name.startswith("review_report_") or name.startswith("review_template_")):
+        return jsonify({"error": "文件名不合法"}), 400
+    out_dir = cfg.get("output_dir", "")
+    candidates = [
+        os.path.join(os.path.dirname(os.path.abspath(out_dir or ".")), "logs", name),
+        os.path.join(ROOT, "outputs", "analysis", name),
+    ]
+    for p in candidates:
+        if os.path.isfile(p):
+            return send_file(p, as_attachment=True, download_name=name)
+    return jsonify({"error": "文件不存在"}), 404
+
+
 @app.route("/api/bridges/<bridge_id>/log")
 def api_bridge_log(bridge_id):
     auth = _require_token()

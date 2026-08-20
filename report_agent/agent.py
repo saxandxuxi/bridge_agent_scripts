@@ -452,6 +452,7 @@ class ReportAgent:
                 f"{period['end'].strftime('%Y%m%d')}.docx"
             )
         out_path = os.path.join(self.cfg.get("output_dir", "outputs"), out_name)
+        repair_stats = {}
         unfilled = report_builder.build_report(
             template_path=self.cfg.get("template", ""),
             output_path=out_path,
@@ -464,6 +465,7 @@ class ReportAgent:
             chart_captions=chart_captions,
             extra_charts=extra_charts,
             text_replace=bridge_cfg.get("text_replace") or None,
+            repair_stats=repair_stats,
         )
 
         # 数据链路日志：每个填入数值的来源与计算链（找不到的会标“未找到”）
@@ -543,6 +545,14 @@ class ReportAgent:
         except Exception as exc:  # noqa: BLE001
             log.warning("确定性体检失败: %s", exc)
 
+        repair = {
+            "auto_fixed": repair_stats.get("spaces_collapsed", 0),
+            "manual_needed": ((len(report_review.get("issues", []))
+                               if report_review else 0) + len(self_check)),
+            "llm_called": report_review is not None,
+            "llm_ok": bool(report_review and report_review.get("raw")),
+        }
+
         summary = {
             "output": out_path,
             "period": {
@@ -563,6 +573,7 @@ class ReportAgent:
             "chart_gaps": chart_gaps if bridge is not None else [],
             "review": report_review,
             "self_check": self_check,
+            "repair": repair,
         }
         # 生成结束后刷新桥数据状态，让 match_stats 反映本次运行的实际命中情况
         if bridge is not None:

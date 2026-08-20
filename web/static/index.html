@@ -78,6 +78,7 @@
   <button data-tab="preprocess" onclick="showTab('preprocess')">数据处理</button>
   <button data-tab="config" onclick="showTab('config')">配置管理</button>
   <button data-tab="scheduler" onclick="showTab('scheduler')">调度器</button>
+  <button data-tab="review" onclick="showTab('review')">审查问题</button>
   <button data-tab="log" onclick="showTab('log')">日志</button>
 </nav>
 <main>
@@ -253,6 +254,17 @@
     </div>
   </section>
 
+  <section id="tab-review" style="display:none">
+    <div class="panel">
+      <h3>审查问题</h3>
+      <div class="row">
+        <select id="revBridge"></select>
+        <button class="ghost" onclick="loadReview()">刷新</button>
+      </div>
+      <div id="revBody">—</div>
+    </div>
+  </section>
+
   <section id="tab-log" style="display:none">
     <div class="panel">
       <h3>运行日志</h3>
@@ -323,6 +335,7 @@ function showTab(name) {
   if (name === "preprocess") loadPreprocessConfig();
   if (name === "config") fillBridgeSelect("cfgBridge");
   if (name === "scheduler") { fillBridgeSelect("schBridge"); loadScheduler(); }
+  if (name === "review") { fillBridgeSelect("revBridge"); loadReview(); }
   if (name === "log") fillBridgeSelect("logBridge");
 }
 
@@ -940,6 +953,89 @@ function loadLog() {
   api("/api/bridges/" + bridgeId + "/log?name=" + $("logName").value + "&lines=" + $("logLines").value)
     .then(function (r) { $("logBody").textContent = r.log || "（空）"; })
     .catch(function (e) { showMsg(String(e), "err"); });
+}
+
+function loadReview() {
+  var bridgeId = $("revBridge").value;
+  if (!bridgeId) return;
+  api("/api/bridges/" + bridgeId + "/review").then(function (r) {
+    var h = "";
+    h += "<p><b>LLM 审查：</b>" +
+      (r.llm_available
+        ? '<span class="green">已启用（审查时调用大模型）</span>'
+        : '<span class="yellow">未启用（未配置 API Key，审查跳过）</span>') + "</p>";
+    var lr = r.last_run || {};
+    var rep = lr.repair || {};
+    h += "<p>最近一次生成：<b>" + esc((lr.period && lr.period.label) || "—") + "</b>　" +
+      "自动纠正 <b>" + (rep.auto_fixed || 0) + "</b> 处　" +
+      "需人工处理 <b>" + (rep.manual_needed || 0) + "</b> 处　" +
+      "大模型审查 " +
+      (rep.llm_called ? (rep.llm_ok ? "已调用并返回结果" : "已调用但无返回") : "未调用") + "</p>";
+
+    h += '<h3 style="font-size:14px;margin:8px 0">报告审查（LLM）</h3>';
+    var rv = lr.review;
+    if (!rv) {
+      h += '<p class="muted">暂无（未生成报告或 LLM 未启用）</p>';
+    } else {
+      var issues = rv.issues || [];
+      h += "<p>" + (issues.length
+        ? '<span class="yellow">发现 ' + issues.length + " 处问题</span>"
+        : '<span class="green">未发现问题</span>') + "</p>";
+      if (issues.length) {
+        h += '<table><thead><tr><th>类型</th><th>说明</th></tr></thead><tbody>' +
+          issues.map(function (i) {
+            return "<tr><td><code>" + esc(i.type || "other") + "</code></td><td>" +
+              esc(i.detail || "") + "</td></tr>";
+          }).join("") + "</tbody></table>";
+      }
+      if (rv.raw) {
+        h += "<details><summary>原始回复</summary><pre>" + esc(rv.raw) + "</pre></details>";
+      }
+    }
+
+    h += '<h3 style="font-size:14px;margin:8px 0">确定性体检（self_check）</h3>';
+    var sc = lr.self_check || [];
+    h += "<p>" + (sc.length
+      ? '<span class="yellow">发现 ' + sc.length + " 处</span>"
+      : '<span class="green">未发现问题</span>') + "</p>";
+    if (sc.length) {
+      h += '<table><thead><tr><th>类型</th><th>说明</th></tr></thead><tbody>' +
+        sc.map(function (i) {
+          return "<tr><td><code>" + esc(i.type || "other") + "</code></td><td>" +
+            esc(i.detail || "") + "</td></tr>";
+        }).join("") + "</tbody></table>";
+    }
+
+    if (r.report_reviews && r.report_reviews.length) {
+      h += '<h3 style="font-size:14px;margin:8px 0">报告审查文件</h3>';
+      h += r.report_reviews.map(function (f) {
+        return '<p class="muted">' + esc(f.name) + "　" + esc(f.mtime) + "　" +
+          (f.ok ? "无问题" : "发现问题 " + (f.issues || []).length + " 处") +
+          '　<a href="/api/bridges/' + bridgeId + '/review-file?name=' +
+          encodeURIComponent(f.name) + '">下载 JSON</a></p>';
+      }).join("");
+    }
+
+    if (r.template_reviews && r.template_reviews.length) {
+      h += '<h3 style="font-size:14px;margin:8px 0">模板审查</h3>';
+      h += r.template_reviews.map(function (f) {
+        var issues = f.issues || [];
+        var body = '<p class="muted">' + esc(f.name) + "　" + esc(f.mtime) + "　" +
+          (issues.length ? "发现问题 " + issues.length + " 处" : "无问题") +
+          '　<a href="/api/bridges/' + bridgeId + '/review-file?name=' +
+          encodeURIComponent(f.name) + '">下载 JSON</a></p>';
+        if (issues.length) {
+          body += '<table><thead><tr><th>类型</th><th>说明</th></tr></thead><tbody>' +
+            issues.map(function (i) {
+              return "<tr><td><code>" + esc(i.type || "other") + "</code></td><td>" +
+                esc(i.detail || "") + "</td></tr>";
+            }).join("") + "</tbody></table>";
+        }
+        return body;
+      }).join("");
+    }
+    $("revBody").innerHTML = h || '<p class="muted">暂无审查数据</p>';
+  }).catch(function (e) { showMsg(String(e), "err"); $("revBody").innerHTML = ""; });
 }
 
 api("/api/status").then(function (st) {

@@ -796,9 +796,9 @@ def compute_feature_stats(dates, means, maxs, mins, seconds=None,
     """
     由日期/日均值/日最大/日最小系列计算整体统计值 + 每日统计。
     native_means/native_maxs/native_mins 提供时（清洗后的原生粒度序列，
-    小时级或秒级，取决于特征），平均值/极值/实测/差值/均方根值改用原生粒度
-    计算，避免“日均值抹平”导致极值失真（如振动 ±5 的瞬时极值被日均摊到
-    -0.0003）。
+    小时级或秒级，取决于特征），平均值/均方根值用原生均值序列，极值用
+    原生最大/最小序列（与报告表格“日最大值/日最小值”聚合口径一致），
+    避免“日均值抹平”导致极值失真（如振动 ±5 的瞬时极值被日均摊到 -0.0003）。
     seconds/missing 为每日有效/缺失秒数(可选，来自 daily 明细)。
     返回 (stats_dict, dates, means, maxs, mins)。
     """
@@ -825,6 +825,10 @@ def compute_feature_stats(dates, means, maxs, mins, seconds=None,
     ext_means = native_means if native_means is not None else means
     ext_maxs = native_maxs if native_maxs is not None else maxs
     ext_mins = native_mins if native_mins is not None else mins
+    if not ext_maxs:
+        ext_maxs = maxs
+    if not ext_mins:
+        ext_mins = mins
     arr = np.array(ext_means, dtype=float)
     daily = []
     for d, m, x, n in zip(dates, means, maxs, mins):
@@ -844,9 +848,9 @@ def compute_feature_stats(dates, means, maxs, mins, seconds=None,
         "平均值": round(float(np.mean(arr)), 6),
         "中位数": round(float(np.median(arr)), 6),
         "标准差": round(float(np.std(arr)), 6),
-        "最大值": round(float(np.max(arr)), 6),
-        "最小值": round(float(np.min(arr)), 6),
-        "差值": round(float(np.max(arr) - np.min(arr)), 6),
+        "最大值": round(float(np.max(ext_maxs)), 6),
+        "最小值": round(float(np.min(ext_mins)), 6),
+        "差值": round(float(np.max(ext_maxs) - np.min(ext_mins)), 6),
         "最大值_实测": round(float(np.max(ext_maxs)), 6),
         "最小值_实测": round(float(np.min(ext_mins)), 6),
         "绝对最大值": round(

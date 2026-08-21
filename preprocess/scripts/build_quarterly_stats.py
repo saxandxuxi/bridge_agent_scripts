@@ -179,9 +179,9 @@ def compute_stats_from_daily(records):
         "平均值": round(float(arr.mean()), 6),
         "中位数": round(float(np.median(arr)), 6),
         "标准差": round(float(arr.std()), 6),
-        "最大值": round(float(np.max(arr)), 6),
-        "最小值": round(float(np.min(arr)), 6),
-        "差值": round(float(np.max(arr) - np.min(arr)), 6),
+        "最大值": round(float(np.max(maxs)), 6),
+        "最小值": round(float(np.min(mins)), 6),
+        "差值": round(float(np.max(maxs) - np.min(mins)), 6),
         "最大值_实测": round(float(np.max(maxs)), 6),
         "最小值_实测": round(float(np.min(mins)), 6),
         "绝对最大值": round(

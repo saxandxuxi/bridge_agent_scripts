@@ -1187,8 +1187,8 @@ class BridgeData:
     def _agg_feature_location(self, feature: str, stat: str) -> str:
         """从季度/年度统计 全桥统计 里取极值对应监测部位（如 最大值位置）。
 
-        build_quarterly_stats 已把 最大值/最小值/最大值_实测/最小值_实测/
-        绝对最大值/差值/剔除温度差值 等极值的位置写入 JSON，总结段落
+        build_quarterly_stats 已把 最大值/最小值/绝对最大值/差值/
+        剔除温度差值 等极值的位置写入 JSON，总结段落
         “对应测点为…”直接引用，避免运行时逐传感器重算。
         """
         if not feature:

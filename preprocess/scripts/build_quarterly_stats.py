@@ -182,8 +182,6 @@ def compute_stats_from_daily(records):
         "最大值": round(float(np.max(maxs)), 6),
         "最小值": round(float(np.min(mins)), 6),
         "差值": round(float(np.max(maxs) - np.min(mins)), 6),
-        "最大值_实测": round(float(np.max(maxs)), 6),
-        "最小值_实测": round(float(np.min(mins)), 6),
         "绝对最大值": round(
             max(abs(np.max(maxs)), abs(np.min(mins))), 6),
         "均方根值": round(float(np.sqrt(np.mean(np.square(arr)))), 6),
@@ -214,8 +212,7 @@ def _clean_daily_records(daily, st, feature=""):
 def _stats_from_hours(hours, means, maxs, mins, st):
     """由小时级序列计算整体统计（剔除恒0故障时间段后的剩余小时）。
 
-    最大值/最小值沿用“日均值口径”（与图库统计一致），
-    最大值_实测/最小值_实测取小时级最大/最小。"""
+    最大值/最小值取清洗后原生最大/最小序列（与报告表格口径一致）。"""
     arr = np.array(means, dtype=float)
     if arr.size == 0:
         return None
@@ -232,8 +229,6 @@ def _stats_from_hours(hours, means, maxs, mins, st):
         "最大值": round(float(np.max(arr)), 6),
         "最小值": round(float(np.min(arr)), 6),
         "差值": round(float(np.max(arr) - np.min(arr)), 6),
-        "最大值_实测": round(float(np.max(maxs)), 6),
-        "最小值_实测": round(float(np.min(mins)), 6),
         "绝对最大值": round(
             max(abs(np.max(maxs)), abs(np.min(mins))), 6),
         "均方根值": round(float(np.sqrt(np.mean(np.square(arr)))), 6),
@@ -314,8 +309,6 @@ def compute_quarter_stats(hours, means, maxs, mins):
         "最大值": round(float(np.max(arr)), 6),
         "最小值": round(float(np.min(arr)), 6),
         "差值": round(float(np.max(arr) - np.min(arr)), 6),
-        "最大值_实测": round(float(np.max(maxs)), 6),
-        "最小值_实测": round(float(np.min(mins)), 6),
         "绝对最大值": round(
             max(abs(np.max(maxs)), abs(np.min(mins))), 6),
         "均方根值": round(float(np.sqrt(np.mean(np.square(arr)))), 6),
@@ -628,8 +621,6 @@ def main():
 
             _max_v, _max_p = _extreme("最大值", "max")
             _min_v, _min_p = _extreme("最小值", "min")
-            _xmax_v, _xmax_p = _extreme("最大值_实测", "max")
-            _xmin_v, _xmin_p = _extreme("最小值_实测", "min")
             _abs_v, _abs_p = _extreme("绝对最大值", "max")
             _diff_v, _diff_p = _extreme("差值", "max")
             _rmx_v, _rmx_p = _extreme("剔除温度最大值", "max")
@@ -662,8 +653,6 @@ def main():
                 "最大值": _f("最大值", max),
                 "最小值": _f("最小值", min),
                 "差值": _f("差值", max),
-                "最大值_实测": _f("最大值_实测", max),
-                "最小值_实测": _f("最小值_实测", min),
                 "绝对最大值": _f("绝对最大值", max),
                 "均方根值": _f("均方根值", max),
                 # 恒0疑似故障位置（如“…一直为0℃，为传感器故障导致”）
@@ -678,8 +667,6 @@ def main():
                 # 极值对应的监测部位（供总结段落“对应测点为…/对应位置为…”引用）
                 "最大值位置": _max_p or "",
                 "最小值位置": _min_p or "",
-                "最大值_实测位置": _xmax_p or "",
-                "最小值_实测位置": _xmin_p or "",
                 "绝对最大值位置": _abs_p or "",
                 "差值位置": _diff_p or "",
             }

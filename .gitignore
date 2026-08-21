@@ -1,16 +1,47 @@
-﻿__pycache__/
+# ---------- Python / IDE / 系统 ----------
+.venv/
+.venv_web/
+__pycache__/
 *.pyc
-*.bak
-preprocess/status.json
-preprocess/pipeline.log
-outputs/
-inputs/
-preprocess/图库_*/
-preprocess/统计值_*/
-preprocess/日级数据/
 .idea/
-.workbuddy/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
+~$*
+*.bak
 
+# ---------- 本地工具/环境 ----------
+.workbuddy/
 .agents/
 skills-lock.json
+.env
+.env.*
+!.env.example
 
+# ---------- 根目录临时脚本（_sim*.py / _corr*.py / _xjr*.py 等） ----------
+/_*.py
+
+# ---------- 日志 ----------
+*.log
+
+# ---------- 运行时产物（不推送到服务器） ----------
+outputs/
+debug/
+web/current_bridge.json
+data/*.csv
+!data/.gitkeep
+monitor_credentials.json
+
+# ---------- 桥数据预处理产物（可在服务器重新生成） ----------
+preprocess/图库*/
+preprocess/统计值*/
+inputs/矮寨大桥_车道统计_*
+inputs/赤石大桥_车道统计_*
+preprocess/*.csv
+preprocess/*.log
+preprocess/status.json
+preprocess/sensor_ids.txt
+
+.venv_web/
+docs/

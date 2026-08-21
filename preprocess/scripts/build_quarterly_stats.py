@@ -463,7 +463,9 @@ def main():
                     _zcode = (_zcode.group(1) if _zcode else "").lower()
                     _zero_ok = _zcode in ("nd", "spfs", "szfs") \
                         or str(feat or "").upper().startswith("LF")
-                    if not _zero_ok and (_mn0 == 0.0 or _mx0 == 0.0):
+                    zero_suspect = not _zero_ok \
+                        and (_mn0 == 0.0 or _mx0 == 0.0)
+                    if zero_suspect:
                         try:
                             fdir = os.path.join(args.daily_root, sid, feat)
                             (hours, hmeans, hmaxs, hmins, *_rest) = \
@@ -487,7 +489,10 @@ def main():
                         except Exception as _exc:  # noqa: BLE001
                             # 小时级数据缺失等：退回每日统计兜底
                             pass
-                    if daily and not hour_cleaned:
+                    # 非 0 疑似测点：直接采用 位置统计 里的整体统计（其极值已按
+                    # 特征原生粒度清洗后计算），不再用每日统计覆盖，避免“日均值
+                    # 抹平”极值。0 疑似且无小时级数据时才用每日统计兜底。
+                    if daily and not hour_cleaned and zero_suspect:
                         cleaned = _clean_daily_records(daily, st, feat)
                         if cleaned and len(cleaned) < len(daily):
                             fault_period_pts.add((pos, pt))

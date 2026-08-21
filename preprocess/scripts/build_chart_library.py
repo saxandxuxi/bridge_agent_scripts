@@ -790,9 +790,15 @@ def aggregate_daily_from_hours(hours, means, maxs, mins):
 
 
 def compute_feature_stats(dates, means, maxs, mins, seconds=None,
-                          missing=None, start=None, end=None):
+                          missing=None, start=None, end=None,
+                          native_means=None, native_maxs=None,
+                          native_mins=None):
     """
     由日期/日均值/日最大/日最小系列计算整体统计值 + 每日统计。
+    native_means/native_maxs/native_mins 提供时（清洗后的原生粒度序列，
+    小时级或秒级，取决于特征），平均值/极值/实测/差值/均方根值改用原生粒度
+    计算，避免“日均值抹平”导致极值失真（如振动 ±5 的瞬时极值被日均摊到
+    -0.0003）。
     seconds/missing 为每日有效/缺失秒数(可选，来自 daily 明细)。
     返回 (stats_dict, dates, means, maxs, mins)。
     """
@@ -816,7 +822,10 @@ def compute_feature_stats(dates, means, maxs, mins, seconds=None,
     secs = list(secs)
     mis = list(mis)
 
-    arr = np.array(means, dtype=float)
+    ext_means = native_means if native_means is not None else means
+    ext_maxs = native_maxs if native_maxs is not None else maxs
+    ext_mins = native_mins if native_mins is not None else mins
+    arr = np.array(ext_means, dtype=float)
     daily = []
     for d, m, x, n in zip(dates, means, maxs, mins):
         daily.append({
@@ -838,10 +847,10 @@ def compute_feature_stats(dates, means, maxs, mins, seconds=None,
         "最大值": round(float(np.max(arr)), 6),
         "最小值": round(float(np.min(arr)), 6),
         "差值": round(float(np.max(arr) - np.min(arr)), 6),
-        "最大值_实测": round(float(np.max(maxs)), 6),
-        "最小值_实测": round(float(np.min(mins)), 6),
+        "最大值_实测": round(float(np.max(ext_maxs)), 6),
+        "最小值_实测": round(float(np.min(ext_mins)), 6),
         "绝对最大值": round(
-            max(abs(np.max(maxs)), abs(np.min(mins))), 6),
+            max(abs(np.max(ext_maxs)), abs(np.min(ext_mins))), 6),
         "均方根值": round(float(np.sqrt(np.mean(np.square(arr)))), 6),
         "每日统计": daily,
     }
@@ -2831,6 +2840,7 @@ def main():
                     gaps_all = []
                     day_dates, day_means, day_maxs = [], [], []
                     day_mins, day_secs, day_miss = [], [], []
+                    native_means, native_maxs, native_mins = [], [], []
                     hist_bins = np.linspace(-1000.0, 1000.0, 101)
                     hist_counts = None
                     chart_day = None          # (日期, hours, means, ix, rx, shifts, gaps)
@@ -2869,6 +2879,11 @@ def main():
                             max_dist_outliers=args.max_dist_outliers,
                             max_total_removals=args.max_removals)
                         spike_rec += r1 + r2 + r3
+                        # 累积清洗后的原生粒度序列（小时级/秒级），
+                        # 供全期极值按特征颗粒度计算
+                        native_means += list(means_d)
+                        native_maxs += list(maxs_d)
+                        native_mins += list(mins_d)
                         # 突变段(按天, 秒级至少 1 分钟)
                         shifts_d = []
                         if not _is_direction_feature(feature):
@@ -2943,7 +2958,8 @@ def main():
                         stats, day_dates, day_means, day_maxs, day_mins = \
                             compute_feature_stats(
                                 day_dates, day_means, day_maxs, day_mins,
-                                day_secs, day_miss, None, None)
+                                day_secs, day_miss, None, None,
+                                native_means, native_maxs, native_mins)
                         if stats is None:
                             issues.append(f"无数据: {sensor}/{feature}")
                             continue
@@ -3073,7 +3089,8 @@ def main():
                     stats, day_dates, day_means, day_maxs, day_mins = \
                         compute_feature_stats(
                             day_dates, day_means, day_maxs, day_mins,
-                            day_secs, day_miss, None, None)
+                            day_secs, day_miss, None, None,
+                            hmeans, hmaxs, hmins)
                     if stats is None:
                         issues.append(f"无数据: {sensor}/{feature}")
                         continue

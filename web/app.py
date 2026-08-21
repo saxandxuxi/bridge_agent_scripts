@@ -1385,6 +1385,8 @@ def _run_pipeline(period: Dict, charts_dir: str, stats_dir: str,
         cmd += ["--bridge", bridge]
     if map_docx:
         cmd += ["--sensor-map-docx", map_docx]
+    # 断点续跑必须默认开启（预处理时跳过已生成的 daily 文件）
+    cmd.append("--resume")
     st["pipeline_cmd"] = " ".join(cmd)
     # 输出实时写入日志文件，超时被杀时也能看到卡在哪一步
     logs_dir = os.path.join(ROOT, "outputs", "logs")
@@ -2076,6 +2078,8 @@ def api_preprocess_run():
         cmd.append("--skip-preprocess")
     if data.get("skip_charts"):
         cmd.append("--skip-charts")
+    # 断点续跑必须默认开启
+    cmd.append("--resume")
     proc = subprocess.Popen(cmd, cwd=ROOT, env=_subprocess_env(),
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     _preprocess["proc"] = proc

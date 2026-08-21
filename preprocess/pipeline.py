@@ -139,6 +139,9 @@ def main() -> int:
     ap.add_argument("--end", default="", help="结束日期 YYYY-MM-DD")
     ap.add_argument("--skip-preprocess", action="store_true")
     ap.add_argument("--skip-charts", action="store_true")
+    ap.add_argument("--stats-only", action="store_true",
+                    help="跳过预处理和图库，只重建统计值(逐传感器+位置统计)与"
+                         "季度/年度统计")
     ap.add_argument("--skip-sensor-map", action="store_true")
     ap.add_argument("--skip-per-sensor", action="store_true",
                     help="生成图库/统计值时跳过逐传感器图，只生成按监测部位"
@@ -182,8 +185,12 @@ def main() -> int:
     py = sys.executable
     ok = True
 
+    # --stats-only：强制跳过预处理与图库，只重建统计值
+    stats_only = args.stats_only
+    skip_pre = args.skip_preprocess or stats_only
+
     # 1) 秒级 -> 日级
-    if not args.skip_preprocess:
+    if not skip_pre:
         if not raw or not os.path.isdir(raw):
             status["error"] = f"秒级原始数据目录不存在: {raw}"
             status["running"] = False
@@ -216,7 +223,7 @@ def main() -> int:
             return 1
 
     # 2) 日级 -> 图库 + 统计值
-    if not args.skip_charts:
+    if not args.skip_charts or stats_only:
         tag = period_tag(start, end)
         daily_base = os.path.join(daily, args.bridge) if (daily and args.bridge) \
             else daily
@@ -238,6 +245,9 @@ def main() -> int:
         # 建图库固定跳过逐传感器图，只生成按监测部位合并的图（更省时，
         # 报告只用合并图）
         cmd += ["--skip-per-sensor"]
+        if stats_only:
+            # 只重建统计值，不生成任何图
+            cmd += ["--skip-charts"]
         if args.period == "yearly" and start and len(start) >= 4:
             # 年度：让 build_chart_library 按年份汇总桥根下所有季度 daily_* 子目录
             cmd += ["--year", start[:4]]
@@ -261,7 +271,7 @@ def main() -> int:
             return 1
 
     # 2.5) 日级 -> 季度/年度统计值(按监测部位合并多传感器)
-    if not args.skip_charts:
+    if not args.skip_charts or stats_only:
         if args.period == "yearly" and daily_base:
             stats_daily_root = daily_base      # 桥根目录, 汇总所有 daily_*
         else:

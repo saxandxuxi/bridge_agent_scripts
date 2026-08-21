@@ -851,8 +851,6 @@ def compute_feature_stats(dates, means, maxs, mins, seconds=None,
         "最大值": round(float(np.max(ext_maxs)), 6),
         "最小值": round(float(np.min(ext_mins)), 6),
         "差值": round(float(np.max(ext_maxs) - np.min(ext_mins)), 6),
-        "最大值_实测": round(float(np.max(ext_maxs)), 6),
-        "最小值_实测": round(float(np.min(ext_mins)), 6),
         "绝对最大值": round(
             max(abs(np.max(ext_maxs)), abs(np.min(ext_mins))), 6),
         "均方根值": round(float(np.sqrt(np.mean(np.square(arr)))), 6),
@@ -1119,6 +1117,31 @@ def detect_zero_runs(hours, means, min_hours=24.0):
                 "持续小时数": round(dur, 1),
             })
     return runs
+
+
+def _mask_zero_run_hours(hours, means, maxs, mins, runs):
+    """剔除落在连续恒0时间段内的小时/秒级点，返回 (hours, means, maxs, mins)。"""
+    if not runs:
+        return hours, means, maxs, mins
+    spans = []
+    for z in runs:
+        try:
+            t0 = dt.datetime.strptime(z["起始时间"], "%Y-%m-%d %H:%M")
+            t1 = dt.datetime.strptime(z["结束时间"], "%Y-%m-%d %H:%M")
+        except (ValueError, KeyError):
+            continue
+        spans.append((t0, t1))
+    if not spans:
+        return hours, means, maxs, mins
+    ho, mo, xo, no = [], [], [], []
+    for i, h in enumerate(hours):
+        if any(t0 <= h <= t1 for t0, t1 in spans):
+            continue
+        ho.append(h)
+        mo.append(means[i])
+        xo.append(maxs[i])
+        no.append(mins[i])
+    return ho, mo, xo, no
 
 
 def plot_time_series(sensor_id, sensor_name, feature, times, means,
@@ -2844,6 +2867,7 @@ def main():
                     gaps_all = []
                     day_dates, day_means, day_maxs = [], [], []
                     day_mins, day_secs, day_miss = [], [], []
+                    native_hours = []
                     native_means, native_maxs, native_mins = [], [], []
                     hist_bins = np.linspace(-1000.0, 1000.0, 101)
                     hist_counts = None
@@ -2885,6 +2909,7 @@ def main():
                         spike_rec += r1 + r2 + r3
                         # 累积清洗后的原生粒度序列（小时级/秒级），
                         # 供全期极值按特征颗粒度计算
+                        native_hours += list(hours_d)
                         native_means += list(means_d)
                         native_maxs += list(maxs_d)
                         native_mins += list(mins_d)
@@ -2959,14 +2984,27 @@ def main():
                             sensor, sensor_name, feature, hist_bins,
                             hist_counts, os.path.join(fout, "频率分布图.png"))
                     if not args.skip_stats:
+                        # 连续恒0故障段（与图库“可能故障”标注同一规则）：剔除后
+                        # 算极值，并记录 疑似故障时间段 供季度统计/总结引用
+                        zero_runs = detect_zero_runs(
+                            native_hours, native_means,
+                            min_hours=zero_min_hours(feature)) \
+                            if native_hours else []
+                        _n_means, _n_maxs, _n_mins = native_means, native_maxs, native_mins
+                        if zero_runs:
+                            _nh, _n_means, _n_maxs, _n_mins = _mask_zero_run_hours(
+                                native_hours, native_means,
+                                native_maxs, native_mins, zero_runs)
                         stats, day_dates, day_means, day_maxs, day_mins = \
                             compute_feature_stats(
                                 day_dates, day_means, day_maxs, day_mins,
                                 day_secs, day_miss, None, None,
-                                native_means, native_maxs, native_mins)
+                                _n_means, _n_maxs, _n_mins)
                         if stats is None:
                             issues.append(f"无数据: {sensor}/{feature}")
                             continue
+                        if zero_runs:
+                            stats["疑似故障时间段"] = zero_runs
                         stats["特征"] = feature
                         stats["特征中文名"] = feature_display(feature)
                         stats["预处理"] = {
@@ -3090,14 +3128,24 @@ def main():
                 day_miss = [_raw_miss.get(d, 0) for d in day_dates]
                 stats = None
                 if not args.skip_stats:
+                    # 连续恒0故障段剔除（与图库“可能故障”标注同一规则）
+                    zero_runs = detect_zero_runs(
+                        hours, hmeans, min_hours=zero_min_hours(feature)) \
+                        if hours else []
+                    _n_means, _n_maxs, _n_mins = hmeans, hmaxs, hmins
+                    if zero_runs:
+                        _nh, _n_means, _n_maxs, _n_mins = _mask_zero_run_hours(
+                            hours, hmeans, hmaxs, hmins, zero_runs)
                     stats, day_dates, day_means, day_maxs, day_mins = \
                         compute_feature_stats(
                             day_dates, day_means, day_maxs, day_mins,
                             day_secs, day_miss, None, None,
-                            hmeans, hmaxs, hmins)
+                            _n_means, _n_maxs, _n_mins)
                     if stats is None:
                         issues.append(f"无数据: {sensor}/{feature}")
                         continue
+                    if zero_runs:
+                        stats["疑似故障时间段"] = zero_runs
                     stats["特征"] = feature
                     stats["特征中文名"] = feature_display(feature)
                     stats["预处理"] = {
@@ -3197,7 +3245,7 @@ def main():
                 except Exception:  # noqa: BLE001
                     pass
 
-        if not args.skip_stats and args.mode != "merged":
+        if not args.skip_stats:
             # 统计值 JSON 只写整体统计字段(不写“每日统计”/“有效天数”/
             # “缺失天数”等明细)；计算过程仍保留，报告运行时按整体统计取值
             for _fstats in (sensor_stats.get("特征统计") or {}).values():

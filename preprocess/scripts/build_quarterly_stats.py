@@ -451,6 +451,14 @@ def main():
                     sid = str(rec.get("传感器编号") or "")
                     daily = (((daily_map.get(sid) or {}).get(feat)
                               or {}).get("每日统计")) or []
+                    # 图库侧已记录的连续恒0故障段（build_chart_library 写入
+                    # 位置统计 的 疑似故障时间段），直接纳入故障清单
+                    st_periods = st.get("疑似故障时间段") or []
+                    if st_periods:
+                        fault_period_pts.add((pos, pt))
+                        zero_periods[
+                            f"{pos}（{pt}）" if len(points) > 1 else pos] = \
+                            st_periods
                     hour_cleaned = False
                     # 疑似 0 故障（非“0为正常值”特征出现 0）：读小时级 daily，
                     # 用与生成图一致的“连续恒0时间段”判定，剔除该段后重算

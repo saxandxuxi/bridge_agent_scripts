@@ -182,8 +182,11 @@ class ReportReviewer:
             "因为某行数值不是全桥最大值就报错；\n"
             "  c. 若某小节的图表后面紧接的表格已给出具体位置（左/右幅、上/下游等），"
             "正文或图注省略方位不算错，不要报。\n"
-            "8) 输出纪律：如果推理过程证明数值/位置与季度统计JSON或表格一致，就"
-            "输出空，不要把“思考过程”当错误输出。\n"
+            "8) 输出纪律（硬性）：issues 数组只收录真正的错误。凡是查证后数值/"
+            "位置/方位与【季度统计JSON】或【传感器名称对照表】一致、结论成立的，"
+            "一律不得出现在 issues 里；禁止输出‘经查证…匹配/无问题/无index_wrong/"
+            "不构成错误’这类自证清白的条目。若全部查证通过，issues 必须为 []，"
+            "绝不能把“思考过程”或“核对结果”当成错误输出。\n"
             "9) 人工修正条件（needs_human=true 仅限以下三类）：① 数据血缘索引断裂"
             "（该数据确实不存在/未找到）；② 图本身错误（图库图不合要求、方位错配"
             "确实存在且无对应测点）；③ 统计计算逻辑错误。其余问题一律走自动修复："
@@ -198,7 +201,9 @@ class ReportReviewer:
             "【季度统计JSON】核对：应变/空间变位/挠度等只有 左幅/右幅，出现"
             "“上游/下游”即 index_wrong；结构温度/环境温湿度只有 上游/下游，出现"
             "“左幅/右幅”也报。图注方位正确但正文方位混用（如应变正文写“下游”"
-            "而图注是“左幅”）必须报。\n"
+            "而图注是“左幅”）必须报。方位是否合法以【传感器名称对照表】实际键为准："
+            "对照表里存在“下游/上游/左幅/右幅”对应键（如 3#墩根部截面顶板下游）"
+            "即为合法，不要臆断某方位未布设。\n"
             "上下文说明：\n"
             "【传感器名称对照表】含 表格映射（温湿度表/结构温度表等）与 传感器名称 键，"
             "用于核对图表位置是否有对应测点；\n"
@@ -270,8 +275,28 @@ class ReportReviewer:
                 seen_r.add(key)
                 result["repairs"].append(x)
         result["raw"] = "\n".join(raws)[:12000] if raws else ""
+        # 后置过滤：LLM 偶发“自证清白”条目（经查证匹配/无问题/无index_wrong…）
+        # 一律剔除，绝不当作问题返回
+        result["issues"] = [
+            i for i in result["issues"]
+            if not _is_self_exonerating(str(i.get("detail") or ""))
+        ]
         result["ok"] = not result["issues"]
         return result
+
+
+def _is_self_exonerating(detail: str) -> bool:
+    """是否属于“自证清白”条目：推理证明正确却仍被列入 issues。"""
+    if not detail:
+        return False
+    if re.search(r"无\s*(index_wrong|image_wrong|stat_logic|错误)", detail):
+        return True
+    if re.search(r"不构成(索引|图片|统计)?错误", detail):
+        return True
+    if re.search(r"(无问题|无错误|未发现问题|确认无误|完全匹配|经查证.*(正确|匹配|无误|合法))",
+                 detail):
+        return True
+    return False
 
 
 def _section_match_hint(name_dict: Dict, seg: str) -> str:

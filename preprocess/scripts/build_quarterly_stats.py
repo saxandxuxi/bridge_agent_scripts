@@ -191,23 +191,12 @@ def compute_stats_from_daily(records):
 
 
 def _clean_daily_records(daily, st, feature=""):
-    """剔除传感器故障时间段：全零日（缺失记0）与 0 污染日。
+    """无小时级数据时的兜底：只剔除全天无数据的全零日（缺失记0）。
 
-    0 污染日：本应有信号（整体均值>0）的传感器某日最小值==0，
-    或负向信号（整体均值<0）的传感器某日最大值==0，通常是故障/缺失记0，
-    不应把 0 计入最小值；剔除后按剩余天数重算各项统计。
-    挠度(ND)/风速(spfs,szfs)/裂缝(LF) 等“0为正常值”特征不剔除。
-    """
+    小时级数据可用时由 _stats_from_hours 按“连续恒0时间段”精确剔除，
+    不在这里按天丢 0 污染日（会误删含有效数据的半天）。"""
     if not daily:
         return daily
-    m = re.search(r"\(([^)]+)\)$", str(feature or ""))
-    code = (m.group(1) if m else "").lower()
-    zero_ok = code in ("nd", "spfs", "szfs") \
-        or str(feature or "").upper().startswith("LF")
-    try:
-        overall_avg = float(st.get("平均值") or 0)
-    except (TypeError, ValueError):
-        overall_avg = None
     out = []
     for d in daily:
         try:
@@ -218,13 +207,64 @@ def _clean_daily_records(daily, st, feature=""):
             continue
         if mx == 0 and mn == 0 and av == 0:
             continue  # 全天无数据（缺失记 0）
-        if not zero_ok and overall_avg is not None:
-            if overall_avg > 0 and mn == 0:
-                continue  # 正值传感器：每日最小值 0 来自缺失/故障
-            if overall_avg < 0 and mx == 0:
-                continue  # 负值传感器：每日最大值 0 来自缺失/故障
         out.append(d)
     return out
+
+
+def _stats_from_hours(hours, means, maxs, mins, st):
+    """由小时级序列计算整体统计（剔除恒0故障时间段后的剩余小时）。
+
+    最大值/最小值沿用“日均值口径”（与图库统计一致），
+    最大值_实测/最小值_实测取小时级最大/最小。"""
+    arr = np.array(means, dtype=float)
+    if arr.size == 0:
+        return None
+    days = len({h.date() for h in hours})
+    return {
+        "起始日期": hours[0].strftime("%Y-%m-%d"),
+        "结束日期": hours[-1].strftime("%Y-%m-%d"),
+        "覆盖天数": days,
+        "有效小时数": int(arr.size),
+        "缺失小时数": float(st.get("缺失小时数") or 0),
+        "平均值": round(float(arr.mean()), 6),
+        "中位数": round(float(np.median(arr)), 6),
+        "标准差": round(float(arr.std()), 6),
+        "最大值": round(float(np.max(arr)), 6),
+        "最小值": round(float(np.min(arr)), 6),
+        "差值": round(float(np.max(arr) - np.min(arr)), 6),
+        "最大值_实测": round(float(np.max(maxs)), 6),
+        "最小值_实测": round(float(np.min(mins)), 6),
+        "绝对最大值": round(
+            max(abs(np.max(maxs)), abs(np.min(mins))), 6),
+        "均方根值": round(float(np.sqrt(np.mean(np.square(arr)))), 6),
+        "有效天数": days,
+        "缺失天数": float(st.get("缺失天数") or 0),
+    }
+
+
+def _mask_zero_run_hours(hours, means, maxs, mins, runs):
+    """剔除落在连续恒0时间段内的小时，返回 (hours, means, maxs, mins)。"""
+    if not runs:
+        return hours, means, maxs, mins
+    spans = []
+    for z in runs:
+        try:
+            t0 = dt.datetime.strptime(z["起始时间"], "%Y-%m-%d %H:%M")
+            t1 = dt.datetime.strptime(z["结束时间"], "%Y-%m-%d %H:%M")
+        except (ValueError, KeyError):
+            continue
+        spans.append((t0, t1))
+    if not spans:
+        return hours, means, maxs, mins
+    ho, mo, xo, no = [], [], [], []
+    for i, h in enumerate(hours):
+        if any(t0 <= h <= t1 for t0, t1 in spans):
+            continue
+        ho.append(h)
+        mo.append(means[i])
+        xo.append(maxs[i])
+        no.append(mins[i])
+    return ho, mo, xo, no
 
 
 def discover_pairs(daily_root):
@@ -403,6 +443,7 @@ def main():
         for feat, pos_tree in sorted(feat_tree.items()):
             pos_entries = {}      # 位置 -> 测点 -> 整体统计
             fault_period_pts = set()   # (位置, 测点) 剔除过故障时间段
+            zero_periods = {}          # "位置（测点）" -> [{起始时间,结束时间,持续小时数}]
             for pos, points in sorted(pos_tree.items()):
                 pos_entries[pos] = {}
                 for pt, rec in sorted(points.items()):
@@ -410,7 +451,43 @@ def main():
                     sid = str(rec.get("传感器编号") or "")
                     daily = (((daily_map.get(sid) or {}).get(feat)
                               or {}).get("每日统计")) or []
-                    if daily:
+                    hour_cleaned = False
+                    # 疑似 0 故障（非“0为正常值”特征出现 0）：读小时级 daily，
+                    # 用与生成图一致的“连续恒0时间段”判定，剔除该段后重算
+                    try:
+                        _mx0 = float(st.get("最大值") or 0)
+                        _mn0 = float(st.get("最小值") or 0)
+                    except (TypeError, ValueError):
+                        _mx0 = _mn0 = None
+                    _zcode = re.search(r"\(([^)]+)\)$", str(feat or ""))
+                    _zcode = (_zcode.group(1) if _zcode else "").lower()
+                    _zero_ok = _zcode in ("nd", "spfs", "szfs") \
+                        or str(feat or "").upper().startswith("LF")
+                    if not _zero_ok and (_mn0 == 0.0 or _mx0 == 0.0):
+                        try:
+                            fdir = os.path.join(args.daily_root, sid, feat)
+                            (hours, hmeans, hmaxs, hmins, *_rest) = \
+                                bcl.read_hourly_series(fdir)
+                            if hours:
+                                runs = bcl.detect_zero_runs(
+                                    hours, hmeans,
+                                    min_hours=bcl.zero_min_hours(feat))
+                                if runs:
+                                    h2, m2, x2, n2 = _mask_zero_run_hours(
+                                        hours, hmeans, hmaxs, hmins, runs)
+                                    new_st = _stats_from_hours(
+                                        h2, m2, x2, n2, st)
+                                    if new_st:
+                                        st = new_st
+                                        hour_cleaned = True
+                                        fault_period_pts.add((pos, pt))
+                                        zero_periods[
+                                            f"{pos}（{pt}）" if len(
+                                                points) > 1 else pos] = runs
+                        except Exception as _exc:  # noqa: BLE001
+                            # 小时级数据缺失等：退回每日统计兜底
+                            pass
+                    if daily and not hour_cleaned:
                         cleaned = _clean_daily_records(daily, st, feat)
                         if cleaned and len(cleaned) < len(daily):
                             fault_period_pts.add((pos, pt))
@@ -582,6 +659,9 @@ def main():
                 # （位置含多个测点时具体到测点，供总结段落引用）
                 "疑似故障传感器位置": fault_positions,
                 "数据缺失严重的传感器位置": missing_positions,
+                # 疑似故障时间段（连续恒0超过阈值，与生成图标注一致）：
+                # "位置（测点）" -> [{起始时间, 结束时间, 持续小时数}]
+                "疑似故障时间段": zero_periods,
                 # 极值对应的监测部位（供总结段落“对应测点为…/对应位置为…”引用）
                 "最大值位置": _max_p or "",
                 "最小值位置": _min_p or "",

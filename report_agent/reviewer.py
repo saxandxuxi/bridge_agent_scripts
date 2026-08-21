@@ -198,6 +198,14 @@ class ReportReviewer:
             "  e. 若你怀疑 stats 解析值与表格矛盾，把 needs_human 置为 true 提示"
             "人工核对即可，不要自行给出替代数值/位置；拿不准正确值时"
             "把 issues.needs_human 置为 true，不要编造替代数值或替代位置。\n"
+            "12) 报告结构权威：图片/测点位置是否合理，一律以报告自身的小标题、"
+            "表格标题、表头、表格内填写的监测部位为准；正文里的布点描述（如“仅在"
+            "××布设振动测点”）不得用于否定图表/表格里的位置，除非报告内部自相矛盾"
+            "（同一图表前后标注不一致）。\n"
+            "13) 审查纪律（宁缺毋滥）：图注与配图说明的语义措辞差异（如“振动”vs"
+            "“地震荷载”这类用词不同）可忽略，不报；但配图说明与图/表方位的客观矛盾"
+            "（说明写左幅、图/表是右幅，或上/下游颠倒）要报 image_wrong/caption。"
+            "如无明确、可证实的问题就输出空 issues；不确定的不要报，避免过度审查。\n"
             "issues.needs_human：仅当“缺少该类型图/统计值/数据/特征，或图库图本身"
             "不合要求、无法通过重新索引/重算纠正”时为 true，其余为 false。\n"
             "repairs.type 取值：chart（重索引图片）、caption（删除/改正错误图注）、"
@@ -209,32 +217,66 @@ class ReportReviewer:
             "写“删除”）。能确定才输出 repair，不确定不要瞎编。\n"
             "detail/reason 用简短中文说明具体位置和问题，能引用数值就引用。"
         )
-        parts = [
-            "【成品报告原文】\n" + (source_text or "（无）")[:30000],
-            "【生成的报告】\n" + report_text[:40000],
-        ]
+        # 长报告拆段逐段审查（降低单次上下文过长导致的幻觉），每段独立调用，
+        # 问题合并去重；成品原文/血缘/图表索引等全局信息每段都带上。
+        base_parts = []
         if lineage_digest:
-            parts.append("【数据链路摘要（未找到/回退项）】\n" + lineage_digest)
+            base_parts.append("【数据链路摘要（未找到/回退项）】\n" + lineage_digest)
         if table_warnings:
-            parts.append("【规则式填表校验告警】\n" + table_warnings)
+            base_parts.append("【规则式填表校验告警】\n" + table_warnings)
         if chart_index:
-            parts.append("【图表索引表（chart_id→图注→位置，供 chart/caption 修复定位）】\n"
-                         + chart_index)
+            base_parts.append("【图表索引表（chart_id→图注→位置，供 chart/caption 修复定位）】\n"
+                              + chart_index)
         if prior_issues:
-            parts.append("【上一轮已发现问题（本轮判断是否已解决、解决是否正确）】\n"
-                         + prior_issues)
-        user = "\n\n".join(parts)
-        data = self._ask_json(system, user)
-        result["raw"] = json.dumps(data, ensure_ascii=False) if data else ""
-        if isinstance(data, dict):
-            issues = data.get("issues") or []
-            result["issues"] = [i for i in issues if isinstance(i, dict)]
-            repairs = data.get("repairs") or []
-            result["repairs"] = [r for r in repairs if isinstance(r, dict)]
-            result["ok"] = not result["issues"]
-        else:
-            result["ok"] = True
+            base_parts.append("【上一轮已发现问题（本轮判断是否已解决、解决是否正确）】\n"
+                              + prior_issues)
+        source_block = "【成品报告原文】\n" + (source_text or "（无）")[:30000]
+        segments = _split_segments(report_text)
+        all_issues, all_repairs, raws = [], [], []
+        for _i, seg in enumerate(segments):
+            parts = [source_block,
+                     f"【生成的报告（第{_i + 1}/{len(segments)}段）】\n{seg}"]
+            parts += base_parts
+            data = self._ask_json(system, "\n\n".join(parts))
+            if isinstance(data, dict):
+                all_issues += [x for x in (data.get("issues") or [])
+                               if isinstance(x, dict)]
+                all_repairs += [x for x in (data.get("repairs") or [])
+                                if isinstance(x, dict)]
+                raws.append(json.dumps(data, ensure_ascii=False))
+        # 合并去重
+        seen_i, seen_r = set(), set()
+        for x in all_issues:
+            key = (str(x.get("type")), str(x.get("detail"))[:60])
+            if key not in seen_i:
+                seen_i.add(key)
+                result["issues"].append(x)
+        for x in all_repairs:
+            key = (str(x.get("type")), str(x.get("target"))[:50],
+                   str(x.get("hint"))[:40])
+            if key not in seen_r:
+                seen_r.add(key)
+                result["repairs"].append(x)
+        result["raw"] = "\n".join(raws)[:12000] if raws else ""
+        result["ok"] = not result["issues"]
         return result
+
+
+def _split_segments(text: str, max_len: int = 6000) -> List[str]:
+    """把报告文本按段落拆成 ≤max_len 的分段（尽量保持段落完整）。"""
+    paras = [p for p in str(text or "").split("\n") if p.strip()]
+    if not paras:
+        return [str(text or "")]
+    segs, cur, cur_len = [], [], 0
+    for p in paras:
+        if cur and cur_len + len(p) > max_len:
+            segs.append("\n".join(cur))
+            cur, cur_len = [], 0
+        cur.append(p)
+        cur_len += len(p) + 1
+    if cur:
+        segs.append("\n".join(cur))
+    return segs
 
 
 _UNIT_RE = re.compile(r"(m/s²|m/s2|℃|%|με|mm|kN|mm/s²)")

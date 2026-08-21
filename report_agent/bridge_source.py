@@ -1013,19 +1013,9 @@ class BridgeData:
             }
             self._stats_cache[str(sensor_id)] = data
             return data
-        path = os.path.join(self.stats_dir, f"{sensor_id}.json")
-        if not os.path.isfile(path):
-            self._stats_cache[sensor_id] = None
-            return None
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            self._stats_cache[sensor_id] = data
-            return data
-        except Exception as exc:  # noqa: BLE001
-            log.warning("读取统计值 %s 失败: %s", path, exc)
-            self._stats_cache[sensor_id] = None
-            return None
+        # 只使用合并的位置统计库（merged），不再读取逐传感器 <编号>.json
+        self._stats_cache[str(sensor_id)] = None
+        return None
 
     def _load_position_stats(self) -> None:
         """加载 位置统计库（与图库目录结构对齐）。
@@ -2102,7 +2092,7 @@ class BridgeData:
                 if os.path.isfile(p):
                     return p
             return os.path.join(self.stats_dir, "位置统计", safe)
-        return os.path.join(self.stats_dir, f"{sensor_id}.json")
+        return os.path.join(self.stats_dir, "位置统计")
 
     def _traffic_lane_stat(self, lane: str) -> Optional[Dict]:
         """从 位置统计/交通荷载/交通荷载.json 取 车道X 的整体统计。

@@ -3245,7 +3245,7 @@ def main():
                 except Exception:  # noqa: BLE001
                     pass
 
-        if not args.skip_stats:
+        if not args.skip_stats and args.mode != "merged":
             # 统计值 JSON 只写整体统计字段(不写“每日统计”/“有效天数”/
             # “缺失天数”等明细)；计算过程仍保留，报告运行时按整体统计取值
             for _fstats in (sensor_stats.get("特征统计") or {}).values():

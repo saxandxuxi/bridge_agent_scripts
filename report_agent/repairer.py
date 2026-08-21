@@ -40,6 +40,9 @@ _AXIS_HINTS = [
     ("y", ("Y向", "Y方向")),
     ("z", ("Z向", "Z方向")),
 ]
+_TITLE_LIKE_END = ("监测统计", "数据分析", "统计分析", "监测小结",
+                   "小结", "结论", "监测数据分析", "曲线图", "直方图",
+                   "时间序列图", "频率分布图", "分布图", "示意图", "布置图")
 
 
 class ReportRepairer:
@@ -175,6 +178,12 @@ class ReportRepairer:
         """文字替换修复：先做数值验证，与确定性重算一致才落地，否则交人工。"""
         target = entry.get("target") or ""
         hint = entry.get("hint") or ""
+        if self._looks_like_title(target):
+            entry["reason"] = (str(entry.get("reason") or "") +
+                               "；目标疑似标题，禁止自动修改标题，交人工")
+            out["needs_human"].append(entry)
+            log.info("文字修复目标疑似标题，不落地：%s", target[:40])
+            return
         ok, reason = self._verify_text_hint(hint)
         if ok:
             out["text_replacements"][target] = hint
@@ -239,6 +248,17 @@ class ReportRepairer:
             except ValueError:
                 continue
         return out
+
+    @staticmethod
+    def _looks_like_title(text: str) -> bool:
+        """目标文字是否像标题（章节/表格/图注标题）：短且以 监测统计/小结/结论/
+        曲线图/直方图 等结尾。此类文字禁止自动替换，只允许删除冗余图注。"""
+        t = str(text or "").strip()
+        if not 4 <= len(t) <= 40:
+            return False
+        if any(t.endswith(x) for x in _TITLE_LIKE_END):
+            return True
+        return t.endswith("图") and len(t) <= 30
 
     def _hint_matches_sensor(self, hint: str, sensor_id: str) -> bool:
         """纠正后的位置词是否命中该传感器的监测部位/位置。"""

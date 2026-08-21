@@ -1556,9 +1556,13 @@ class BridgeData:
     def _fault_positions(self, gs: Dict, pos_entries: Dict, feature: str,
                          metric: str, period: Dict):
         """返回 (持续为0疑似故障位置, 数据缺失位置)。"""
-        # 持续为 0（疑似故障）位置：优先用预处理统计已写好的“持续为0位置”，
-        # 再补扫位置统计里 最大值==最小值==0 且非“0为正常值”特征的测点
-        zero_pos = [str(p) for p in (gs.get("持续为0位置") or []) if p]
+        # 疑似故障位置：优先用季度统计文件里预处理已写好的
+        # “疑似故障传感器位置”（权威口径，可具体到测点），再补扫位置统计
+        zero_pos = []
+        for k in ("疑似故障传感器位置", "持续为0位置"):
+            for p in (gs.get(k) or []):
+                if p and str(p) not in zero_pos:
+                    zero_pos.append(str(p))
         for pos, points in pos_entries.items():
             if not isinstance(points, dict):
                 continue
@@ -1577,7 +1581,8 @@ class BridgeData:
         # 缺失位置：缺失天数 > 0（整日缺失必报），或缺失小时数达到阈值
         # （默认 72h，bridge_data.summary_miss_hours 可调），或完全无数据
         miss_hours_thr = self._summary_miss_threshold()
-        miss_pos = []
+        miss_pos = [str(p) for p in (gs.get("数据缺失严重的传感器位置") or [])
+                    if p]
         for pos, points in pos_entries.items():
             if not isinstance(points, dict):
                 continue

@@ -383,18 +383,64 @@ def main():
                 st_records = [r for r in st_records if "边坡" not in r[0]]
                 if not st_records:
                     continue
-            # 恒0（疑似故障）测点：整季 最大值==最小值==0（如结构温度传感器
-            # 一直为0），不应参与全桥极值/均值统计，否则会把“最低0℃”当成
-            # 真实极值；单独记录 持续为0位置 供总结段落引用。
+            # 恒值（疑似故障）测点：整季 最大值==最小值（恒0 或恒非0），且非
+            # “0为正常值”的特征（挠度 ND/风速 spfs,szfs/裂缝 LF）。这类测点
+            # 不应参与全桥极值/均值统计，否则会把“最低0℃”当成真实极值；
+            # 单独记录 疑似故障传感器位置 供总结段落引用。
+            def _is_constant_fault(st, feature=""):
+                try:
+                    mx = float(st.get("最大值") or 0)
+                    mn = float(st.get("最小值") or 0)
+                except (TypeError, ValueError):
+                    return False
+                if abs(mx - mn) > 1e-9:
+                    return False
+                m = re.search(r"\(([^)]+)\)$", str(feature or ""))
+                code = (m.group(1) if m else "").lower()
+                zero_ok = code in ("nd", "spfs", "szfs") \
+                    or str(feature or "").upper().startswith("LF")
+                if zero_ok and mx == 0.0:
+                    return False
+                return True
+
             def _is_zero(st):
                 try:
                     return (float(st.get("最大值") or 0) == 0.0
                             and float(st.get("最小值") or 0) == 0.0)
                 except (TypeError, ValueError):
                     return False
+
+            def _is_missing_severe(st, threshold=72.0):
+                try:
+                    mh = float(st.get("缺失小时数") or 0)
+                    md = float(st.get("缺失天数") or 0)
+                except (TypeError, ValueError):
+                    return False
+                return md > 0 or mh >= threshold
+
+            # 位置级故障/缺失清单：同一位置多个测点时具体到测点
+            def _fmt_pos(pos, pts, all_pts):
+                if not pts:
+                    return []
+                if len(all_pts) > 1:
+                    if len(pts) >= len(all_pts):
+                        return [pos]
+                    return [f"{pos}（{'、'.join(sorted(pts))}）"]
+                return [pos]
+
+            fault_positions, missing_positions = [], []
+            for pos, pts in sorted(pos_entries.items()):
+                all_pts = list(pts.keys())
+                faulty = [pt for pt, rec in pts.items()
+                          if _is_constant_fault((rec.get("统计") or {}), feat)]
+                missing = [pt for pt, rec in pts.items()
+                           if _is_missing_severe(rec.get("统计") or {})]
+                fault_positions += _fmt_pos(pos, faulty, all_pts)
+                missing_positions += _fmt_pos(pos, missing, all_pts)
             zero_positions = sorted({pos for pos, st in st_records
                                      if _is_zero(st)})
-            st_records = [r for r in st_records if not _is_zero(r[1])] \
+            st_records = [r for r in st_records
+                          if not _is_constant_fault(r[1], feat)] \
                 or st_records
             def _f(key, agg):
                 vals = []
@@ -469,6 +515,10 @@ def main():
                 "均方根值": _f("均方根值", max),
                 # 恒0疑似故障位置（如“…一直为0℃，为传感器故障导致”）
                 "持续为0位置": zero_positions,
+                # 疑似故障传感器位置 / 数据缺失严重的传感器位置
+                # （位置含多个测点时具体到测点，供总结段落引用）
+                "疑似故障传感器位置": fault_positions,
+                "数据缺失严重的传感器位置": missing_positions,
                 # 极值对应的监测部位（供总结段落“对应测点为…/对应位置为…”引用）
                 "最大值位置": _max_p or "",
                 "最小值位置": _min_p or "",

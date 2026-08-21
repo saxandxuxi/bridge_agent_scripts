@@ -190,6 +190,43 @@ def compute_stats_from_daily(records):
     }
 
 
+def _clean_daily_records(daily, st, feature=""):
+    """剔除传感器故障时间段：全零日（缺失记0）与 0 污染日。
+
+    0 污染日：本应有信号（整体均值>0）的传感器某日最小值==0，
+    或负向信号（整体均值<0）的传感器某日最大值==0，通常是故障/缺失记0，
+    不应把 0 计入最小值；剔除后按剩余天数重算各项统计。
+    挠度(ND)/风速(spfs,szfs)/裂缝(LF) 等“0为正常值”特征不剔除。
+    """
+    if not daily:
+        return daily
+    m = re.search(r"\(([^)]+)\)$", str(feature or ""))
+    code = (m.group(1) if m else "").lower()
+    zero_ok = code in ("nd", "spfs", "szfs") \
+        or str(feature or "").upper().startswith("LF")
+    try:
+        overall_avg = float(st.get("平均值") or 0)
+    except (TypeError, ValueError):
+        overall_avg = None
+    out = []
+    for d in daily:
+        try:
+            mx = float(d.get("最大值"))
+            mn = float(d.get("最小值"))
+            av = float(d.get("平均值"))
+        except (TypeError, ValueError):
+            continue
+        if mx == 0 and mn == 0 and av == 0:
+            continue  # 全天无数据（缺失记 0）
+        if not zero_ok and overall_avg is not None:
+            if overall_avg > 0 and mn == 0:
+                continue  # 正值传感器：每日最小值 0 来自缺失/故障
+            if overall_avg < 0 and mx == 0:
+                continue  # 负值传感器：每日最大值 0 来自缺失/故障
+        out.append(d)
+    return out
+
+
 def discover_pairs(daily_root):
     """扫描 daily/<传感器>/<特征>/，返回 [(传感器, 特征)]。"""
     pairs = []
@@ -348,6 +385,8 @@ def main():
         if not feat_tree:
             print("[错误] 位置统计库为空")
             sys.exit(1)
+        # 逐传感器每日统计（供剔除故障时间段后重算；缺失时退回整体统计）
+        daily_map = collect_daily_from_stats(stats_dir, sensor_map)
         t0 = time.time()
         _label = "年度统计值" if period == "yearly" else "季度统计值"
         result = {
@@ -363,13 +402,33 @@ def main():
         done = 0
         for feat, pos_tree in sorted(feat_tree.items()):
             pos_entries = {}      # 位置 -> 测点 -> 整体统计
+            fault_period_pts = set()   # (位置, 测点) 剔除过故障时间段
             for pos, points in sorted(pos_tree.items()):
                 pos_entries[pos] = {}
                 for pt, rec in sorted(points.items()):
                     st = rec.get("统计") or {}
+                    sid = str(rec.get("传感器编号") or "")
+                    daily = (((daily_map.get(sid) or {}).get(feat)
+                              or {}).get("每日统计")) or []
+                    if daily:
+                        cleaned = _clean_daily_records(daily, st, feat)
+                        if cleaned and len(cleaned) < len(daily):
+                            fault_period_pts.add((pos, pt))
+                        if cleaned:
+                            new_st = compute_stats_from_daily([
+                                (d.get("日期"), d.get("平均值"),
+                                 d.get("最大值"), d.get("最小值"))
+                                for d in cleaned])
+                            if new_st:
+                                # 保留缺失/有效小时等字段口径
+                                for k in ("缺失小时数", "有效小时数",
+                                          "有效天数", "缺失天数"):
+                                    if st.get(k) is not None:
+                                        new_st[k] = st[k]
+                                st = new_st
                     pos_entries[pos][pt] = {
                         "统计": st,
-                        "传感器编号": rec.get("传感器编号", ""),
+                        "传感器编号": sid,
                     }
             # 无每日统计: 直接比较各测点的整体统计字段
             st_records = [(pos, pt.get("统计") or {})
@@ -385,10 +444,9 @@ def main():
                     continue
             # 疑似故障测点：① 整季恒值（最大值==最小值，恒0 或恒非0）；或
             # ② 非“0为正常值”的特征却出现 0 污染（如结构温度 min==0 而
-            # max>0，说明本应有信号却读成 0，通常是传感器故障/缺失记0）。
-            # 排除“0为正常值”的特征（挠度 ND/风速 spfs,szfs/裂缝 LF）。
-            # 这类测点不应参与全桥极值/均值统计，否则会把“最低0℃”当成真实
-            # 极值；单独记录 疑似故障传感器位置 供总结段落引用。
+            # max>0）。有每日统计的测点已在上方剔除故障时间段后重算，这里
+            # 只排除“剔除后仍无有效数据”的整段故障测点；被剔除过故障时间
+            # 但仍有有效数据的测点照常参与统计，并记入 疑似故障传感器位置。
             def _is_suspected_fault(st, feature=""):
                 try:
                     mx = float(st.get("最大值") or 0)
@@ -436,7 +494,8 @@ def main():
             for pos, pts in sorted(pos_entries.items()):
                 all_pts = list(pts.keys())
                 faulty = [pt for pt, rec in pts.items()
-                          if _is_suspected_fault((rec.get("统计") or {}), feat)]
+                          if (pos, pt) in fault_period_pts
+                          or _is_suspected_fault((rec.get("统计") or {}), feat)]
                 missing = [pt for pt, rec in pts.items()
                            if _is_missing_severe(rec.get("统计") or {})]
                 fault_positions += _fmt_pos(pos, faulty, all_pts)

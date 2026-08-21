@@ -43,6 +43,10 @@ _AXIS_HINTS = [
 _TITLE_LIKE_END = ("监测统计", "数据分析", "统计分析", "监测小结",
                    "小结", "结论", "监测数据分析", "曲线图", "直方图",
                    "时间序列图", "频率分布图", "分布图", "示意图", "布置图")
+_CAPTION_END = ("频率分布直方图", "时程曲线图", "时间序列图", "曲线图",
+                "直方图", "时程曲线", "频率分布图", "分布图", "曲线")
+_KEEP_TITLE_END = ("布置图", "示意图", "平面图", "立面图", "断面图",
+                   "结构图", "流程图", "系统图", "测点布置图")
 
 
 class ReportRepairer:
@@ -134,6 +138,12 @@ class ReportRepairer:
         if not target:
             out["needs_human"].append(entry)
             return
+        if self._is_redundant_caption(target):
+            # 无编号、紧挨正规图注的冗余图注：一律删除，不做替换
+            out["caption_removals"].append(target)
+            out["applied"].append(entry)
+            log.info("删除冗余图注：%s", target[:40])
+            return
         if hint and hint != "删除":
             out["caption_replacements"][target] = hint
         else:
@@ -178,6 +188,11 @@ class ReportRepairer:
         """文字替换修复：先做数值验证，与确定性重算一致才落地，否则交人工。"""
         target = entry.get("target") or ""
         hint = entry.get("hint") or ""
+        if self._is_redundant_caption(target):
+            out["caption_removals"].append(target)
+            out["applied"].append(entry)
+            log.info("删除冗余图注（文字修复路径）：%s", target[:40])
+            return
         if self._looks_like_title(target):
             entry["reason"] = (str(entry.get("reason") or "") +
                                "；目标疑似标题，禁止自动修改标题，交人工")
@@ -259,6 +274,19 @@ class ReportRepairer:
         if any(t.endswith(x) for x in _TITLE_LIKE_END):
             return True
         return t.endswith("图") and len(t) <= 30
+
+    @staticmethod
+    def _is_redundant_caption(text: str) -> bool:
+        """无编号、以 曲线图/直方图/时程曲线 等结尾、且非原报告图纸标题
+        （布置图/示意图/平面图 等）的文字，判定为冗余图注，应删除。"""
+        t = str(text or "").strip()
+        if not 4 <= len(t) <= 40:
+            return False
+        if re.match(r"^图\s*\d+[-.]\d+", t):
+            return False   # 正规编号图注，不动
+        if any(t.endswith(x) for x in _KEEP_TITLE_END):
+            return False   # 原报告图纸标题（布置图/示意图…），保留
+        return any(t.endswith(x) for x in _CAPTION_END)
 
     def _hint_matches_sensor(self, hint: str, sensor_id: str) -> bool:
         """纠正后的位置词是否命中该传感器的监测部位/位置。"""

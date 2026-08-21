@@ -383,25 +383,29 @@ def main():
                 st_records = [r for r in st_records if "边坡" not in r[0]]
                 if not st_records:
                     continue
-            # 恒值（疑似故障）测点：整季 最大值==最小值（恒0 或恒非0），且非
-            # “0为正常值”的特征（挠度 ND/风速 spfs,szfs/裂缝 LF）。这类测点
-            # 不应参与全桥极值/均值统计，否则会把“最低0℃”当成真实极值；
-            # 单独记录 疑似故障传感器位置 供总结段落引用。
-            def _is_constant_fault(st, feature=""):
+            # 疑似故障测点：① 整季恒值（最大值==最小值，恒0 或恒非0）；或
+            # ② 非“0为正常值”的特征却出现 0 污染（如结构温度 min==0 而
+            # max>0，说明本应有信号却读成 0，通常是传感器故障/缺失记0）。
+            # 排除“0为正常值”的特征（挠度 ND/风速 spfs,szfs/裂缝 LF）。
+            # 这类测点不应参与全桥极值/均值统计，否则会把“最低0℃”当成真实
+            # 极值；单独记录 疑似故障传感器位置 供总结段落引用。
+            def _is_suspected_fault(st, feature=""):
                 try:
                     mx = float(st.get("最大值") or 0)
                     mn = float(st.get("最小值") or 0)
                 except (TypeError, ValueError):
                     return False
-                if abs(mx - mn) > 1e-9:
-                    return False
                 m = re.search(r"\(([^)]+)\)$", str(feature or ""))
                 code = (m.group(1) if m else "").lower()
                 zero_ok = code in ("nd", "spfs", "szfs") \
                     or str(feature or "").upper().startswith("LF")
-                if zero_ok and mx == 0.0:
+                if zero_ok:
                     return False
-                return True
+                if abs(mx - mn) <= 1e-9:
+                    return True
+                if mn == 0.0 and mx > 0.0:
+                    return True
+                return False
 
             def _is_zero(st):
                 try:
@@ -432,7 +436,7 @@ def main():
             for pos, pts in sorted(pos_entries.items()):
                 all_pts = list(pts.keys())
                 faulty = [pt for pt, rec in pts.items()
-                          if _is_constant_fault((rec.get("统计") or {}), feat)]
+                          if _is_suspected_fault((rec.get("统计") or {}), feat)]
                 missing = [pt for pt, rec in pts.items()
                            if _is_missing_severe(rec.get("统计") or {})]
                 fault_positions += _fmt_pos(pos, faulty, all_pts)
@@ -440,7 +444,7 @@ def main():
             zero_positions = sorted({pos for pos, st in st_records
                                      if _is_zero(st)})
             st_records = [r for r in st_records
-                          if not _is_constant_fault(r[1], feat)] \
+                          if not _is_suspected_fault(r[1], feat)] \
                 or st_records
             def _f(key, agg):
                 vals = []

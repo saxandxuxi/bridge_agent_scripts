@@ -1837,10 +1837,10 @@ class BridgeData:
 
     @staticmethod
     def _constant_faulty(fstats: Dict, feature: str) -> bool:
-        """恒值传感器判定：整季 最大值==最小值（如一直为0/恒值）视为故障或
-        无效数据，对应表格行应填“—”，且不参与 stats.* 聚合。
-        例外：裂缝(LF)/挠度(ND)/风速(spfs,szfs) 等“0为正常值”的特征，
-        恒为 0 属正常状态，不算故障。"""
+        """疑似故障传感器判定：① 整季恒值（最大值==最小值，恒0/恒非0）；
+        ② 非“0为正常值”的特征出现 0 污染（min==0 而 max>0，如结构温度
+        本应有信号却读成 0）。视为故障/无效，表格行填“—”，不参与聚合。
+        例外：裂缝(LF)/挠度(ND)/风速(spfs,szfs) 等“0为正常值”的特征。"""
         if not isinstance(fstats, dict):
             return False
         try:
@@ -1848,15 +1848,17 @@ class BridgeData:
             mn = float(fstats.get("最小值"))
         except (TypeError, ValueError):
             return False
-        if abs(mx - mn) > 1e-9:
-            return False
         m = re.search(r"\(([^)]+)\)$", str(feature or ""))
         code = (m.group(1) if m else "").lower()
         zero_ok = (code in ("nd", "spfs", "szfs")
                    or str(feature or "").upper().startswith("LF"))
-        if zero_ok and mx == 0.0:
+        if zero_ok:
             return False
-        return True
+        if abs(mx - mn) <= 1e-9:
+            return True
+        if mn == 0.0 and mx > 0.0:
+            return True
+        return False
 
     def _feature_stats(self, sensor_id: str, metric: str, feature: str = "") -> Optional[Dict]:
         data = self._load_sensor_stats(sensor_id)

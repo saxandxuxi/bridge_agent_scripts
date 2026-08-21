@@ -280,6 +280,8 @@ class ReportReviewer:
         result["issues"] = [
             i for i in result["issues"]
             if not _is_self_exonerating(str(i.get("detail") or ""))
+            and not _issue_false_missing_position(
+                str(i.get("detail") or ""), name_dict)
         ]
         result["ok"] = not result["issues"]
         return result
@@ -296,6 +298,56 @@ def _is_self_exonerating(detail: str) -> bool:
     if re.search(r"(无问题|无错误|未发现问题|确认无误|完全匹配|经查证.*(正确|匹配|无误|合法))",
                  detail):
         return True
+    return False
+
+
+_FEAT_KW = [
+    ("WD", ("结构温度",)),
+    ("YB", ("应变",)),
+    ("WSD", ("环境温度", "环境湿度", "温湿度")),
+    ("GNSS", ("空间变位", "位移")),
+    ("ND", ("挠度",)),
+    ("DZJSD", ("地震", "振动")),
+    ("SZJSD", ("地震",)),
+    ("FSFX", ("风速", "风向")),
+    ("SL", ("索力",)),
+    ("EZJD", ("倾角",)),
+]
+
+
+def _issue_false_missing_position(detail: str, name_dict: Dict) -> bool:
+    """误报拦截：条目宣称“某方位（上游/下游/左幅/右幅）不存在/无测点”，
+    但传感器名称对照表里该特征族确实存在该方位的测点（如 结构温度 有
+    “3#墩根部截面顶板下游”，审查却称仅有上游）——判为误报剔除。
+    应变没有下游测点时不会误伤（对照表无 下游+YB）。"""
+    if not detail or not name_dict:
+        return False
+    m = re.search(
+        r"(?:无|没有|不存在|未布设|未设)[^，。；]{0,12}?"
+        r"['\"“”]?(上游|下游|左幅|右幅)['\"“”]?"
+        r"(?:方向|测点|传感器|维度|对应)?", detail)
+    if not m:
+        return False
+    direction = m.group(1)
+    feat_prefix = ""
+    for prefix, kws in _FEAT_KW:
+        if any(k in detail for k in kws):
+            feat_prefix = prefix
+            break
+    if not feat_prefix:
+        return False
+    sn = (name_dict or {}).get("传感器名称") or {}
+    if not isinstance(sn, dict):
+        sn = name_dict or {}
+    for _k, entries in sn.items():
+        if direction not in str(_k):
+            continue
+        for e in entries or []:
+            feats = e.get("特征编码") or []
+            if not feats and e.get("特征"):
+                feats = [e["特征"]]
+            if any(feat_prefix in str(f) for f in feats):
+                return True
     return False
 
 

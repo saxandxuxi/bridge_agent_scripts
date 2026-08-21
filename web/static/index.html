@@ -1279,10 +1279,14 @@ function loadReview() {
     if (!rv) {
       h += '<p class="muted">暂无（未生成报告或 LLM 未启用）</p>';
     } else {
-      var issues = rv.issues || [];
+      var issues = (rv.issues || []).filter(function (i) {
+        return i.needs_human === true || i.needs_human === "true" || i.needs_human === "True";
+      });
+      var autoN = (rv.issues || []).length - issues.length;
       h += "<p>" + (issues.length
-        ? '<span class="red">以下 ' + issues.length + " 处为自动纠正后仍未解决的问题，需要人工处理/确认</span>"
-        : '<span class="green">自动纠正后未发现问题</span>') + "</p>";
+        ? '<span class="red">以下 ' + issues.length + " 处为 LLM 标注需人工处理的问题</span>"
+        : '<span class="green">无 LLM 标注需人工处理的问题</span>') +
+        (autoN > 0 ? '　<span class="muted">另有 ' + autoN + " 处已自动修复（图注删除/数据替换/总结润色）</span>" : "") + "</p>";
       if (issues.length) {
         h += '<table><thead><tr><th>类型</th><th>说明</th></tr></thead><tbody>' +
           issues.map(function (i) {

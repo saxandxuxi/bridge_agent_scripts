@@ -1348,8 +1348,78 @@ def verify_table_columns(output_path: str, lineage: Optional[List[Dict]] = None,
     return warnings
 
 
-def _apply_text_replacements(doc: Document, replacements: Dict[str, str]) -> int:
-    """对全文（正文/表格/页眉页脚）做字典级文字修正，如 堡->墩（源文档字库替换错误）。"""
+def _mark_substrings(paragraph, subs: list) -> int:
+    """把段落中出现的子串拆成独立 run 并标红（用于 marked_report 审查版）。"""
+    from docx.shared import RGBColor
+    runs = list(getattr(paragraph, "runs", []))
+    if not runs:
+        return 0
+    full = "".join(r.text for r in runs)
+    intervals = []
+    for sub in subs:
+        if not sub:
+            continue
+        start = 0
+        while True:
+            idx = full.find(sub, start)
+            if idx < 0:
+                break
+            intervals.append((idx, idx + len(sub)))
+            start = idx + len(sub)
+    if not intervals:
+        return 0
+    intervals.sort()
+    merged = []
+    for a, b in intervals:
+        if merged and a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    base = runs[0]
+    parts = []  # (text, mark)
+    pos = 0
+    for r in runs:
+        t = r.text or ""
+        if not t:
+            continue
+        seg0, seg1 = pos, pos + len(t)
+        cursor = seg0
+        for a, b in merged:
+            if b <= seg0 or a >= seg1:
+                continue
+            lo, hi = max(a, seg0), min(b, seg1)
+            if lo > cursor:
+                parts.append((t[cursor - seg0:lo - seg0], False))
+            parts.append((t[lo - seg0:hi - seg0], True))
+            cursor = hi
+        if cursor < seg1:
+            parts.append((t[cursor - seg0:], False))
+        pos = seg1
+    base.text = ""
+    for r in runs[1:]:
+        r.text = ""
+    for txt, mark in parts:
+        if not txt:
+            continue
+        nr = paragraph.add_run(txt)
+        try:
+            if base.font.name:
+                nr.font.name = base.font.name
+            if base.font.size:
+                nr.font.size = base.font.size
+            if base.font.bold is not None:
+                nr.font.bold = base.font.bold
+        except Exception:  # noqa: BLE001
+            pass
+        if mark:
+            nr.font.color.rgb = RGBColor(0xC0, 0x00, 0x00)
+    return len(merged)
+
+
+def _apply_text_replacements(doc: Document, replacements: Dict[str, str],
+                             mark: bool = False) -> int:
+    """对全文（正文/表格/页眉页脚）做字典级文字修正，如 堡->墩。
+    mark=True 时把修正后的新文字标红（供 marked_report 审查版）。"""
     changed = 0
     for paragraph in _walk_paragraphs(doc):
         full = "".join(r.text for r in paragraph.runs)
@@ -1366,11 +1436,19 @@ def _apply_text_replacements(doc: Document, replacements: Dict[str, str]) -> int
             changed += 1
     if changed:
         log.info("文字修正 %d 处：%s", changed, replacements)
+    if mark and replacements:
+        subs = [b for b in replacements.values() if b]
+        marked_n = 0
+        for paragraph in _walk_paragraphs(doc):
+            marked_n += _mark_substrings(paragraph, subs)
+        if marked_n:
+            log.info("审查版标红 %d 处修正文字", marked_n)
     return changed
 
 
-def _remove_paragraphs_by_fragment(doc: Document, fragments: List[str]) -> int:
-    """删除全文里包含任一错误图注片段的段落（用于审查发现的错误配图说明）。"""
+def _remove_paragraphs_by_fragment(doc: Document, fragments: List[str],
+                                   mark: bool = False) -> int:
+    """删除全文里包含任一错误图注片段的段落；mark=True 时标红删除线不删。"""
     removed = 0
     frags = [f for f in (fragments or []) if f]
     if not frags:
@@ -1378,8 +1456,17 @@ def _remove_paragraphs_by_fragment(doc: Document, fragments: List[str]) -> int:
     for paragraph in _walk_paragraphs(doc):
         full = "".join(r.text for r in paragraph.runs)
         if any(f in full for f in frags):
-            for r in paragraph.runs:
-                r.text = ""
+            if mark:
+                try:
+                    from docx.shared import RGBColor
+                    for r in paragraph.runs:
+                        r.font.color.rgb = RGBColor(0xC0, 0x00, 0x00)
+                        r.font.strike = True
+                except Exception:  # noqa: BLE001
+                    pass
+            else:
+                for r in paragraph.runs:
+                    r.text = ""
             removed += 1
     if removed:
         log.info("删除错误图注段落 %d 处", removed)

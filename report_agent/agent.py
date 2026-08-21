@@ -633,6 +633,28 @@ class ReportAgent:
         except Exception as exc:  # noqa: BLE001
             log.warning("报告审查记录保存失败: %s", exc)
 
+        # 审查修复过的报告另存一份“修正标红审查版”到 outputs/marked_report/，
+        # reports/ 目录保留纯净版
+        marked_path = ""
+        if caption_replacements or caption_removals:
+            try:
+                import shutil as _shutil
+                marked_dir = os.path.join(
+                    os.path.dirname(os.path.dirname(out_path)), "marked_report")
+                os.makedirs(marked_dir, exist_ok=True)
+                marked_path = os.path.join(marked_dir, out_name)
+                _shutil.copyfile(out_path, marked_path)
+                from docx import Document as _MarkDoc
+                md = _MarkDoc(marked_path)
+                report_builder._apply_text_replacements(
+                    md, caption_replacements, mark=True)
+                report_builder._remove_paragraphs_by_fragment(
+                    md, caption_removals, mark=True)
+                md.save(marked_path)
+                log.info("审查版报告（修正标红）已写出: %s", marked_path)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("生成审查版报告失败: %s", exc)
+
         needs_human_issues = [
             iss for iss in (report_review or {}).get("issues", [])
             if iss.get("needs_human") in (True, "true", "True")
@@ -655,6 +677,7 @@ class ReportAgent:
 
         summary = {
             "output": out_path,
+            "marked_output": marked_path,
             "period": {
                 "mode": mode,
                 "start": period["start"].isoformat(),

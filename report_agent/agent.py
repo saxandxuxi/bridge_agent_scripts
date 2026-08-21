@@ -642,7 +642,9 @@ class ReportAgent:
                 marked_dir = os.path.join(
                     os.path.dirname(os.path.dirname(out_path)), "marked_report")
                 os.makedirs(marked_dir, exist_ok=True)
-                marked_path = os.path.join(marked_dir, out_name)
+                marked_name = (
+                    os.path.splitext(out_name)[0] + "_marked.docx")
+                marked_path = os.path.join(marked_dir, marked_name)
                 _shutil.copyfile(out_path, marked_path)
                 from docx import Document as _MarkDoc
                 md = _MarkDoc(marked_path)

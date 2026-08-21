@@ -138,6 +138,12 @@ class ReportRepairer:
         if not target:
             out["needs_human"].append(entry)
             return
+        if self._is_numbered_caption(target):
+            # 编号正规图注（图N.N-N …）一律不动：不删不改，交人工
+            entry["reason"] = (str(entry.get("reason") or "")
+                               + "；目标是编号正规图注，禁止自动删除/修改")
+            out["needs_human"].append(entry)
+            return
         if self._is_redundant_caption(target):
             # 无编号、紧挨正规图注的冗余图注：一律删除，不做替换
             out["caption_removals"].append(target)
@@ -145,10 +151,18 @@ class ReportRepairer:
             log.info("删除冗余图注：%s", target[:40])
             return
         if hint and hint != "删除":
-            out["caption_replacements"][target] = hint
+            if self._is_safe_replace_target(target):
+                out["caption_replacements"][target] = hint
+                out["applied"].append(entry)
+            else:
+                # 通用短词（如 环境温度/振动）禁止整篇替换，交人工
+                entry["reason"] = (str(entry.get("reason") or "")
+                                   + "；目标过短/非完整图注，禁止全局替换")
+                out["needs_human"].append(entry)
+            return
         else:
             out["caption_removals"].append(target)
-        out["applied"].append(entry)
+            out["applied"].append(entry)
         log.info("修复 caption：%s -> %s", target, hint or "删除")
 
     def _repair_summary(self, entry: Dict, out: Dict) -> None:
@@ -188,10 +202,21 @@ class ReportRepairer:
         """文字替换修复：先做数值验证，与确定性重算一致才落地，否则交人工。"""
         target = entry.get("target") or ""
         hint = entry.get("hint") or ""
+        if self._is_numbered_caption(target):
+            entry["reason"] = (str(entry.get("reason") or "")
+                               + "；目标是编号正规图注，禁止自动删除/修改")
+            out["needs_human"].append(entry)
+            return
         if self._is_redundant_caption(target):
             out["caption_removals"].append(target)
             out["applied"].append(entry)
             log.info("删除冗余图注（文字修复路径）：%s", target[:40])
+            return
+        if len(target) < 8:
+            # 通用短词（如 环境温度/振动/左幅）禁止整篇替换，交人工
+            entry["reason"] = (str(entry.get("reason") or "")
+                               + "；目标过短，禁止全局替换")
+            out["needs_human"].append(entry)
             return
         if self._looks_like_title(target):
             entry["reason"] = (str(entry.get("reason") or "") +
@@ -287,6 +312,17 @@ class ReportRepairer:
         if any(t.endswith(x) for x in _KEEP_TITLE_END):
             return False   # 原报告图纸标题（布置图/示意图…），保留
         return any(t.endswith(x) for x in _CAPTION_END)
+
+    @staticmethod
+    def _is_numbered_caption(text: str) -> bool:
+        """是否以 图N.N-N 开头的编号正规图注。"""
+        return bool(re.match(r"^图\s*\d+[-.]\d+", str(text or "").strip()))
+
+    @staticmethod
+    def _is_safe_replace_target(text: str) -> bool:
+        """替换目标是否足够具体（≥8 字的完整句/图注），避免整篇误替换。"""
+        t = str(text or "").strip()
+        return len(t) >= 8
 
     def _hint_matches_sensor(self, hint: str, sensor_id: str) -> bool:
         """纠正后的位置词是否命中该传感器的监测部位/位置。"""

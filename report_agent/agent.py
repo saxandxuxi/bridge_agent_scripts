@@ -636,14 +636,19 @@ class ReportAgent:
             iss for iss in (report_review or {}).get("issues", [])
             if iss.get("needs_human") in (True, "true", "True")
         ]
+        # 最终遗留问题 = 最后一轮审查仍报出的全部问题（自动纠正多轮后仍未消失，
+        # 说明无法自动解决，均需人工处理）+ 确定性体检问题 + 修复器标记的人工项
+        final_issues = (report_review or {}).get("issues", []) if report_review else []
+        repairer_human = sum(len(r.get("needs_human", [])) for r in repair_log)
         repair = {
             "auto_fixed": repair_stats.get("spaces_collapsed", 0),
-            "manual_needed": len(needs_human_issues) + len(self_check),
+            "repairs_applied": sum(len(r.get("applied", []))
+                                   for r in repair_log),
+            "manual_needed": len(final_issues) + len(self_check) + repairer_human,
+            "final_issue_count": len(final_issues),
             "llm_called": report_review is not None,
             "llm_ok": bool(report_review and report_review.get("raw")),
             "rounds": len(rounds_log),
-            "repairs_applied": sum(len(r.get("applied", []))
-                                  for r in repair_log),
             "needs_human": needs_human_issues,
         }
 

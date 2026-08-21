@@ -1779,6 +1779,11 @@ def api_bridge_review(bridge_id):
                         os.path.getmtime(p)).isoformat(timespec="seconds"),
                     "ok": data.get("ok", True),
                     "issues": data.get("issues", []),
+                    "final": data.get("final"),
+                    "rounds": data.get("rounds") or [],
+                    "repairs": data.get("repairs") or [],
+                    "self_check": data.get("self_check") or [],
+                    "max_rounds": data.get("max_rounds", 1),
                     "raw": (data.get("raw") or "")[:2000],
                 })
             except Exception:  # noqa: BLE001
@@ -1814,6 +1819,7 @@ def api_bridge_review(bridge_id):
             except Exception:  # noqa: BLE001
                 continue
     template_reviews.sort(key=lambda x: x["mtime"], reverse=True)
+    latest_review = report_reviews[0] if report_reviews else {}
 
     # 4) LLM 是否可用（决定审查是否真的调用了大模型）
     llm = cfg.get("llm", {}) or {}
@@ -1832,6 +1838,13 @@ def api_bridge_review(bridge_id):
             "repair": last_run.get("repair"),
         },
         "report_reviews": report_reviews,
+        "latest_review": {
+            "rounds": latest_review.get("rounds") or [],
+            "repairs": latest_review.get("repairs") or [],
+            "final": latest_review.get("final"),
+            "self_check": latest_review.get("self_check") or [],
+            "max_rounds": latest_review.get("max_rounds", 1),
+        },
         "template_reviews": template_reviews,
         "logs_dir": os.path.relpath(logs_dir, ROOT).replace("\\", "/"),
     })

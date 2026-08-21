@@ -5,9 +5,9 @@
 修复类型：
   chart   — 按 hint 重索引图片（重取图库 PNG，验证位置命中）
   caption — 删除/改正错误的图注文字（对 docx 段落做删除或替换）
-  summary — 清缓存，下一轮重建时按真实数据重新生成总结
-  stat    — 方向化统计（X/Y/Z .loc）已在 resolver 内修复，这里仅登记
-  cell    — 单元格重解析（当前无法确定唯一来源时交人工）
+  summary — 若 hint 是整句修正则替换文档文字；否则清缓存重新生成总结
+  stat    — 同 summary：有整句修正就落地为文字替换
+  cell    — 有整句修正就落地为文字替换，否则交人工
   unit    — 单位/空格规范化（build 收尾已确定性处理）
 """
 
@@ -41,6 +41,7 @@ class ReportRepairer:
             "needs_human": [],
             "caption_removals": [],
             "caption_replacements": {},
+            "text_replacements": {},
         }
         for r in repairs or []:
             if not isinstance(r, dict):
@@ -63,8 +64,7 @@ class ReportRepairer:
             elif rtype == "stat":
                 self._repair_stat(entry, out)
             elif rtype == "cell":
-                # 单元格重解析依赖模板行/列与测点映射，无法唯一确定时交人工
-                out["needs_human"].append(entry)
+                self._repair_cell(entry, out)
             else:
                 out["needs_human"].append(entry)
         return out
@@ -116,18 +116,38 @@ class ReportRepairer:
 
     def _repair_summary(self, entry: Dict, out: Dict) -> None:
         target = entry.get("target") or ""
-        # 清掉该指标的总结缓存，下一轮 build 会按真实数据重新生成
-        for key in list(getattr(self.bridge, "_summary_cache", {}).keys()):
-            if key.split("|", 1)[0] == target or target in key.split("|", 1)[0]:
-                del self.bridge._summary_cache[key]
+        hint = entry.get("hint") or ""
+        # target 是完整句子/较长片段且 hint 为修正文字 -> 落地为文档文字替换；
+        # target 是指标名（短）-> 清总结缓存，下一轮按真实数据重新生成
+        if len(target) >= 8 and hint:
+            out["text_replacements"][target] = hint
+        else:
+            for key in list(getattr(self.bridge, "_summary_cache", {}).keys()):
+                if key.split("|", 1)[0] == target or target in key.split("|", 1)[0]:
+                    del self.bridge._summary_cache[key]
         out["applied"].append(entry)
-        log.info("修复 summary：清除 %s 缓存待重建", target or "全部")
+        log.info("修复 summary：%s",
+                 ("文字替换 %s -> %s" % (target[:40], hint[:40]))
+                 if len(target) >= 8 and hint else ("清除缓存 %s" % (target or "全部")))
 
     def _repair_stat(self, entry: Dict, out: Dict) -> None:
-        # 方向化统计（X/Y/Z .loc）的根因已在 resolver 内修复（按特征族取
-        # 全部轴传感器）。这里登记为已处理，交由下一轮审查确认是否正确。
+        target = entry.get("target") or ""
+        hint = entry.get("hint") or ""
+        # 方向化统计（X/Y/Z .loc）的根因已在 resolver 内修复；LLM 给出整句
+        # 修正时（如 Z 方向位置错配）直接落地为文档文字替换
+        if len(target) >= 8 and hint:
+            out["text_replacements"][target] = hint
         out["applied"].append(entry)
-        log.info("修复 stat：交由方向化 resolver 重解析 %s", entry.get("target"))
+        log.info("修复 stat：%s", entry.get("target"))
+
+    def _repair_cell(self, entry: Dict, out: Dict) -> None:
+        target = entry.get("target") or ""
+        hint = entry.get("hint") or ""
+        if len(target) >= 8 and hint:
+            out["text_replacements"][target] = hint
+            out["applied"].append(entry)
+        else:
+            out["needs_human"].append(entry)
 
     def _hint_matches_sensor(self, hint: str, sensor_id: str) -> bool:
         """纠正后的位置词是否命中该传感器的监测部位/位置。"""

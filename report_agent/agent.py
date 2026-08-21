@@ -605,6 +605,7 @@ class ReportAgent:
             repair_log.append(rp)
             caption_removals.extend(rp.get("caption_removals", []))
             caption_replacements.update(rp.get("caption_replacements", {}))
+            caption_replacements.update(rp.get("text_replacements", {}))
             prior_issues_json = json.dumps(
                 (review or {}).get("issues", []), ensure_ascii=False,
                 default=str)

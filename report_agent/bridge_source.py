@@ -1172,8 +1172,12 @@ class BridgeData:
                     pts = ((fe.get("位置") or {}).get(loc) or {})
                     for _pt, rec in pts.items():
                         if str(rec.get("传感器编号", "")) == str(sensor_id):
-                            v = (rec.get("统计") or {}).get(
-                                STAT_KEY_MAP.get(stat, stat))
+                            st = (rec.get("统计") or {})
+                            # 恒值故障（整季最大值==最小值，且非“0为正常值”特征）
+                            # 的回退聚合值必须排除，避免把 0℃ 故障当真实极值
+                            if self._constant_faulty(st, feat):
+                                break
+                            v = st.get(STAT_KEY_MAP.get(stat, stat))
                             if v is not None:
                                 break
             if v is None:
@@ -1182,8 +1186,10 @@ class BridgeData:
                 if isinstance(pos, dict):
                     fe2 = pos.get(feat)
                     if isinstance(fe2, dict):
-                        v = (fe2.get("统计") or {}).get(
-                            STAT_KEY_MAP.get(stat, stat))
+                        st = (fe2.get("统计") or {})
+                        if self._constant_faulty(st, feat):
+                            continue
+                        v = st.get(STAT_KEY_MAP.get(stat, stat))
             if v is not None:
                 return v
         return None
@@ -1437,6 +1443,26 @@ class BridgeData:
         trm_v, trm_loc = self._metric_extreme(
             metric, "temp_rm_range", "剔除温度差值",
             "剔除温度差值位置", period, gs)
+
+        # 最小值==0 时，把逐传感器明细里值为 0 的测点补进 恒0疑似故障位置，
+        # 避免位置统计扫描漏掉（如季度统计里该位置不是 max==min==0 记录）
+        if min_v is not None and min_v == 0.0 and metric:
+            try:
+                _v0, _d0 = self.resolve_metric_stat_detail(
+                    metric, "min", period)
+                for _s in (_d0 or {}).get("逐传感器") or []:
+                    if not isinstance(_s, dict):
+                        continue
+                    try:
+                        _sv = float(_s.get("值"))
+                    except (TypeError, ValueError):
+                        continue
+                    if abs(_sv) <= 1e-9:
+                        _pos0 = str(_s.get("监测部位") or "").strip()
+                        if _pos0 and _pos0 not in zero_pos:
+                            zero_pos.append(_pos0)
+            except Exception:  # noqa: BLE001
+                pass
 
         # 最小值==0 且存在恒0故障位置：0 极可能来自故障测点（如结构温度 0℃），
         # 用位置统计清洗值重算真实最小值（跳过恒值/恒0测点），

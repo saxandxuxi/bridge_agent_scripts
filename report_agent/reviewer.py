@@ -126,11 +126,16 @@ class ReportReviewer:
                       lineage_digest: str = "",
                       table_warnings: str = "",
                       chart_index: str = "",
-                      prior_issues: str = "") -> Dict:
+                      prior_issues: str = "",
+                      name_dict_json: str = "",
+                      quarterly_stats_json: str = "") -> Dict:
         """审查生成的报告，返回 {"ok", "issues", "repairs", "raw"}。
 
         repairs 是机器可执行的修复清单（供 repairer 逐条“验证后落地”），
         issues 是给人看的问题清单，二者可同时存在。
+
+        只核查：表格重复/血缘索引、图表对应与图注、总结/结论段落的数值与位置
+        （以季度统计JSON为准）。不对照成品报告原文；宁缺毋滥。
         """
         result = {"ok": True, "issues": [], "repairs": [], "raw": ""}
         if not self.available():
@@ -140,86 +145,55 @@ class ReportReviewer:
             log.info("报告文本为空，跳过报告审查")
             return result
         system = (
-            "你是桥梁健康监测报告质量审查专家。对照成品报告原文与真实监测数据"
-            "（数据链路摘要），审查“生成的报告”是否存在错误。\n"
-            "只输出 JSON：{\"issues\": [{\"type\": \"...\", \"detail\": \"...\", "
+            "你是桥梁健康监测报告质量审查专家。审查“生成的报告”，只输出 JSON："
+            "{\"issues\": [{\"type\": \"...\", \"detail\": \"...\", "
             "\"needs_human\": true/false}], \"repairs\": [{\"type\": \"...\", "
             "\"target\": \"...\", \"hint\": \"...\", \"reason\": \"...\"}]}；"
             "没有问题输出 {\"issues\": [], \"repairs\": []}。\n"
-            "重点审查（issues.type 取值：table_duplicate / index_wrong / "
-            "image_wrong / stat_logic / unit_wrong / summary_stale / "
-            "period_mismatch / other）：\n"
-            "1) 表格：是否有重复的列或重复的行；单元格数值是否张冠李戴（如右幅行填了"
-            "左幅数据）。\n"
-            "2) 图片：图本身是否左右幅/上下游/位置错配，或同一张图被重复插入。"
-            "若图片是对的、只是图片下方或正文里的“配图说明文字”写错（如标题是3#墩、"
-            "配图说明却写2#墩），不要报 image_wrong，而是输出 caption 修复："
-            "type=caption、target=错的图注原文片段（用于定位删除）、hint=正确文字或"
-            "“删除”。\n"
-            "3) 方位语义：桥跨地名方位（炎陵侧/汝城侧/随州侧/湘潭侧/吉首侧等）可与"
-            "截面方位（上游/下游/左幅/右幅/顶板/底板）叠加共存，语义一致即可，不要"
-            "因为“上游+炎陵侧”同时出现就报冲突；只有当真正的截面方位（左幅↔右幅、"
-            "上游↔下游、顶板↔底板）与表格/数据矛盾时才报 index_wrong/image_wrong。\n"
-            "4) 统计逻辑：湿度等百分数不应超过 100（如 112% 一定错）；温度/应变等"
-            "不应出现明显反物理的值；表格里“最大值”必须不小于“最小值”，“平均值”必须"
-            "落在 [最小值, 最大值] 闭区间内；“差值/极差”应为非负。\n"
-            "5) 单位：数值单位是否写错（如 m/s² 落在句号外、%与℃混用）；数值和单位"
-            "之间不能有多余空格（如“5.5  m/s²”“6.9m/s² ”）。type=unit_wrong。\n"
-            "6) 总结段落：结论里的统计值是否和报告正文/表格不一致；是否照抄成品报告"
-            "里的旧数值(应从数据重算，不能直接回填原文)；是否在同一句里把“最高/最低”"
-            "极值重复输出两遍且数值口径不一致。注意：四舍五入保留1位小数属正常精度"
-            "处理（如 43.2758℃ 写成 43.3℃ 是合理的），不要报；只有两位小数下四舍五入"
-            "也不一致（偏差≥0.5）、或数值在正文/表格/数据链路中完全找不到来源时才报。"
-            "type=summary_stale。\n"
-            "7) 极值来源：若某个极值来自恒 0/故障测点(如结构温度最低 0℃)，正文必须"
-            "明确标注是传感器故障，且“对应测点位置”要和“故障位置”前后一致。"
-            "type=summary_stale。\n"
-            "8) 多方向位置：GNSS 的 X/Y/Z 三方向“对应测点”必须各自正确，"
-            "不能出现 Z 方向复用 Y 方向位置。type=index_wrong。\n"
-            "9) 报告期：标题/页眉/正文的季度或年份是否和声明报告期一致。"
-            "type=period_mismatch。\n"
-            "10) 结论与真实数据一致性（双向）：原文/结论说某位置“正常”，但数据链路"
-            "摘要显示该位置有恒0故障、缺失天数>0或缺失小时数达到阈值，必须报 "
-            "summary_stale 并给 summary 修复；反之原文说某位置“异常/故障”，但数据"
-            "显示正常，也必须按真实数据纠正。\n"
-            "11) 数据阅读纪律（避免误报/误改）：\n"
-            "  a. 布点/限值表（表头如 一级/二级/三级 限值、布点表、设计值）不是监测"
-            "统计表，禁止用其中的数字计算差值/极值或作为替代值；统计表表头含"
-            "平均/最大/最小/差值。\n"
-            "  b. 边坡/大地坐标类 GNSS（位置名含“边坡”，如 炎陵侧中跨1/4截面对应"
-            "边坡）是大地坐标绝对值，配置已将其从位移指标中排除，禁止把它当全局"
-            "位移极值或替代值；位移极值只取非边坡统计表。\n"
-            "  c. 数据链路摘要里“未找到”的 cell 通常是恒值故障传感器（整季恒值/恒0），"
-            "不代表该测点整组数据缺失；不得据此断言某个极值“无数据支撑”。\n"
-            "  d. 权威口径：结论中的统计值以季度/年度统计文件（季度统计.json）的"
-            "全桥统计与 stats.* 占位符解析结果为准，这是数据侧唯一权威；报告表格"
-            "个别行与全桥统计不一致、或限值表数值不同，都不代表结论值虚构；只有"
-            "季度统计文件缺失该特征时才可判“无数据支撑”。\n"
-            "  e. 若你怀疑 stats 解析值与表格矛盾，把 needs_human 置为 true 提示"
-            "人工核对即可，不要自行给出替代数值/位置；拿不准正确值时"
-            "把 issues.needs_human 置为 true，不要编造替代数值或替代位置。\n"
-            "12) 报告结构权威：图片/测点位置是否合理，一律以报告自身的小标题、"
-            "表格标题、表头、表格内填写的监测部位为准；正文里的布点描述（如“仅在"
-            "××布设振动测点”）不得用于否定图表/表格里的位置，除非报告内部自相矛盾"
-            "（同一图表前后标注不一致）。\n"
-            "13) 审查纪律（宁缺毋滥）：图注与配图说明的语义措辞差异（如“振动”vs"
-            "“地震荷载”这类用词不同）可忽略，不报；但配图说明与图/表方位的客观矛盾"
-            "（说明写左幅、图/表是右幅，或上/下游颠倒）要报 image_wrong/caption。"
-            "如无明确、可证实的问题就输出空 issues；不确定的不要报，避免过度审查。\n"
+            "只查以下几类问题，其他一律不报（宁缺毋滥，不确定就不报）：\n"
+            "1) 表格行/列之间数据重复（type=table_duplicate）。\n"
+            "2) 表格血缘索引：表格里填的数值与所在行的方位/位置/测点是否张冠李戴"
+            "（type=index_wrong）。位置以表格标题、表头、表格内填写的监测部位为准。\n"
+            "3) 图表与小节/表格对应：通常图都是对的，只检查：\n"
+            "   a. 多余/错误的图注文字，输出 caption 修复（target=错的图注原文片段，"
+            "hint=正确文字或“删除”）；\n"
+            "   b. 方位模糊匹配错配：用【传感器名称对照表】核对本小节位置是否有对应"
+            "测点。例如跨中1/2截面温湿度分左右幅，但结构温度不分左右（只有上游/"
+            "下游），插入结构温度图时不能用左右幅位置。\n"
+            "4) 总结段落（3.x 小结）：从【季度统计JSON】取该小节对应特征的 全桥统计，"
+            "核对数值、对应位置、结论是否一致，并判断是否需要润色：原文说某位置正常"
+            "但数据缺失/疑似故障 -> 润色（summary 修复）；原文说某位置异常但数据正常"
+            "-> 润色。统计值与季度统计JSON匹配即通过，不需要再看其他表。\n"
+            "5) 结论段落（4.监测结论与建议）：用完整【季度统计JSON】匹配数值/位置/"
+            "结论。\n"
+            "6) 硬性统计/单位错误：湿度百分数>100、平均值不在[最小,最大]闭区间、"
+            "差值/极差<0（type=stat_logic/unit_wrong）。四舍五入保留1位小数属正常，不报。\n"
+            "上下文说明：\n"
+            "【传感器名称对照表】含 表格映射（温湿度表/结构温度表等）与 传感器名称 键，"
+            "用于核对图表位置是否有对应测点；\n"
+            "【季度统计JSON】含每个特征的 全桥统计（含 疑似故障传感器位置/数据缺失"
+            "严重的传感器位置/疑似故障时间段），是数值与位置的权威口径；\n"
+            "【数据链路摘要】【图表索引表】辅助核对。\n"
+            "禁止：不对照成品报告原文；不用限值表/布点表计算或否定数值；不因表格"
+            "个别行与季度统计不一致就判虚构（报 needs_human 提示人工核对即可）；"
+            "不编造替代数值/位置；不因正文布点描述否定图表位置（除非报告内部自相"
+            "矛盾）。\n"
             "issues.needs_human：仅当“缺少该类型图/统计值/数据/特征，或图库图本身"
             "不合要求、无法通过重新索引/重算纠正”时为 true，其余为 false。\n"
-            "repairs.type 取值：chart（重索引图片）、caption（删除/改正错误图注）、"
-            "stat（重算统计值）、cell（重算单元格）、summary（重生成总结润色）、"
-            "unit（单位/空格规范化）。\n"
+            "repairs.type 取值：chart / caption / stat / cell / summary / unit。\n"
             "repairs.target：chart 用图表索引表里的 chart_id；caption 用错的图注原文"
-            "片段；stat/cell 用占位符或“对应测点/位置”所在指标；summary 用指标名。\n"
-            "repairs.hint：正确的监测位置/方向/特征，或 caption 的正确文字（删除则"
-            "写“删除”）。能确定才输出 repair，不确定不要瞎编。\n"
+            "片段；summary 用指标名。\n"
+            "repairs.hint：正确文字（删除图注写“删除”）或需润色的总结描述。"
+            "能确定才输出 repair，不确定不要瞎编。\n"
             "detail/reason 用简短中文说明具体位置和问题，能引用数值就引用。"
         )
         # 长报告拆段逐段审查（降低单次上下文过长导致的幻觉），每段独立调用，
-        # 问题合并去重；成品原文/血缘/图表索引等全局信息每段都带上。
+        # 问题合并去重；名称对照/季度统计/血缘/图表索引等全局信息每段都带上。
         base_parts = []
+        if name_dict_json:
+            base_parts.append("【传感器名称对照表】\n" + name_dict_json[:30000])
+        if quarterly_stats_json:
+            base_parts.append("【季度统计JSON】\n" + quarterly_stats_json[:40000])
         if lineage_digest:
             base_parts.append("【数据链路摘要（未找到/回退项）】\n" + lineage_digest)
         if table_warnings:
@@ -230,12 +204,19 @@ class ReportReviewer:
         if prior_issues:
             base_parts.append("【上一轮已发现问题（本轮判断是否已解决、解决是否正确）】\n"
                               + prior_issues)
-        source_block = "【成品报告原文】\n" + (source_text or "（无）")[:30000]
+        name_dict = {}
+        try:
+            if name_dict_json:
+                name_dict = json.loads(name_dict_json)
+        except Exception:  # noqa: BLE001
+            name_dict = {}
         segments = _split_segments(report_text)
         all_issues, all_repairs, raws = [], [], []
         for _i, seg in enumerate(segments):
-            parts = [source_block,
-                     f"【生成的报告（第{_i + 1}/{len(segments)}段）】\n{seg}"]
+            sec_hint = _section_match_hint(name_dict, seg)
+            parts = [f"【生成的报告（第{_i + 1}/{len(segments)}段）】\n{seg}"]
+            if sec_hint:
+                parts.append("【本段小节匹配（传感器对照表键）】\n" + sec_hint)
             parts += base_parts
             data = self._ask_json(system, "\n\n".join(parts))
             if isinstance(data, dict):
@@ -260,6 +241,27 @@ class ReportReviewer:
         result["raw"] = "\n".join(raws)[:12000] if raws else ""
         result["ok"] = not result["issues"]
         return result
+
+
+def _section_match_hint(name_dict: Dict, seg: str) -> str:
+    """给段落加上“章节->名称对照表键”的确定性匹配提示。"""
+    try:
+        from .section_matcher import match_section
+    except Exception:  # noqa: BLE001
+        return ""
+    title = ""
+    for line in str(seg or "").split("\n"):
+        t = line.strip()
+        if re.match(r"^\d+(\.\d+){1,3}(?=[\u4e00-\u9fa5\s])", t):
+            title = t
+            break
+    if not title:
+        return ""
+    r = match_section(name_dict, title, seg)
+    out = f"小节：{title}；表格映射键={r.get('表格映射') or '（无）'}；" \
+          f"指标={r.get('指标') or '（无）'}；命中传感器名称键=" \
+          f"{'、'.join(r.get('传感器名称') or [])[:300] or '（无）'}"
+    return out
 
 
 def _split_segments(text: str, max_len: int = 6000) -> List[str]:

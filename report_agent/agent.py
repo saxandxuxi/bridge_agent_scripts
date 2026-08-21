@@ -119,6 +119,23 @@ def _is_other_registered_bridge_name(name: str, current: str) -> bool:
     return any(_bridge_key(b.get("name")) == nk for b in bridges)
 
 
+def _quarterly_digest(agg: Dict) -> Dict:
+    """把季度/年度统计压缩成“特征 -> 全桥统计”摘要（去掉逐位置明细）。
+
+    供 LLM 审查总结/结论段落核对数值与位置（全桥统计含 疑似故障传感器位置、
+    数据缺失严重的传感器位置、疑似故障时间段 等权威清单）。
+    """
+    digest = {}
+    for data in agg.values():
+        for bname, b in (data.get("桥") or {}).items():
+            digest[str(bname)] = {
+                feat: {"全桥统计": (fe.get("全桥统计") or {})}
+                for feat, fe in (b or {}).items()
+                if isinstance(fe, dict) and fe.get("全桥统计")
+            }
+    return digest
+
+
 class ReportAgent:
     def __init__(self, config: Dict):
         self.cfg = config
@@ -564,12 +581,32 @@ class ReportAgent:
             # LLM 审查
             review = None
             if reviewer.available():
+                name_dict_json = ""
+                quarterly_stats_json = ""
+                if bridge is not None:
+                    try:
+                        _nd = {}
+                        if bridge.name_dict_path and os.path.isfile(
+                                bridge.name_dict_path):
+                            with open(bridge.name_dict_path, "r",
+                                      encoding="utf-8") as _f:
+                                _nd = json.load(_f)
+                        name_dict_json = json.dumps(
+                            _nd, ensure_ascii=False, default=str)
+                    except Exception:  # noqa: BLE001
+                        name_dict_json = json.dumps(
+                            bridge.name_dict, ensure_ascii=False, default=str)
+                    quarterly_stats_json = json.dumps(
+                        _quarterly_digest(bridge._load_aggregate_stats()),
+                        ensure_ascii=False, default=str)
                 review = reviewer.review_report(
                     source_text, _read_docx_text(out_path),
                     lineage_digest=lineage_digest,
                     table_warnings=table_warnings,
                     chart_index=chart_index_str,
                     prior_issues=prior_issues_json,
+                    name_dict_json=name_dict_json,
+                    quarterly_stats_json=quarterly_stats_json,
                 )
                 n_issues = len(review.get("issues", []))
                 if n_issues:

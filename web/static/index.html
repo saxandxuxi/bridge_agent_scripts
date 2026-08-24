@@ -181,14 +181,19 @@
           <input type="file" id="tplFile2" accept=".docx" style="max-width:260px">
           <button class="ghost" onclick="uploadTemplateLocal()">③ 上传本地解析模版</button>
         </div>
-        <div class="row">
-          <button class="ghost" onclick="parseInputReport()">① 已有报告解析（一键生成模版）</button>
-          <select id="inputReportSel" style="min-width:260px"></select>
-          <button class="ghost" onclick="loadInputReports()">刷新报告列表</button>
-        </div>
-        <div id="parseStatus" class="muted"></div>
-        <div id="parseResult" style="display:none;margin-top:10px"></div>
       </div>
+    </div>
+
+    <div class="panel">
+      <h3>已有报告解析（一键生成模版）</h3>
+      <p class="muted">从 inputs/ 选一份成品报告，一键解析生成带版本号（_v1/_v2…）的新模版。</p>
+      <div class="row">
+        <button onclick="parseInputReport()">解析所选报告生成模版</button>
+        <select id="inputReportSel" style="min-width:280px"></select>
+        <button class="ghost" onclick="loadInputReports()">刷新报告列表</button>
+      </div>
+      <div id="parseStatus" class="muted"></div>
+      <div id="parseResult" style="display:none;margin-top:10px"></div>
     </div>
 
     <div class="panel">

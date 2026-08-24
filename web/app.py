@@ -859,20 +859,15 @@ def _next_template_version(bridge_name: str) -> str:
     tpl_dir = os.path.join(ROOT, "templates")
     prefix = (bridge_name or "桥") + "_template"
     max_ver = 0
-    has_plain = False
     if os.path.isdir(tpl_dir):
         for fn in os.listdir(tpl_dir):
             if not fn.lower().endswith(".docx"):
                 continue
             stem = fn[:-5]
-            if stem == prefix:
-                has_plain = True
-            else:
-                m = re.match(re.escape(prefix) + r"_v(\d+)$", stem)
-                if m:
-                    max_ver = max(max_ver, int(m.group(1)))
-    if not has_plain and max_ver == 0:
-        return f"{prefix}.docx"
+            m = re.match(re.escape(prefix) + r"_v(\d+)$", stem)
+            if m:
+                max_ver = max(max_ver, int(m.group(1)))
+    # 始终带版本号：第一个生成 _v1，之后 _v2/_v3…
     return f"{prefix}_v{max_ver + 1}.docx"
 
 

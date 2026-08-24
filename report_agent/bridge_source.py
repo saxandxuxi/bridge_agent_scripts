@@ -1827,10 +1827,13 @@ class BridgeData:
 
     @staticmethod
     def _constant_faulty(fstats: Dict, feature: str) -> bool:
-        """疑似故障传感器判定：① 整季恒值（最大值==最小值，恒0/恒非0）；
-        ② 非“0为正常值”的特征出现 0 污染（min==0 而 max>0，如结构温度
-        本应有信号却读成 0）。视为故障/无效，表格行填“—”，不参与聚合。
-        例外：裂缝(LF)/挠度(ND)/风速(spfs,szfs) 等“0为正常值”的特征。"""
+        """恒值传感器判定：整季最大值==最小值（恒0/恒非0）视为故障/无效，
+        表格行填“—”，不参与聚合。
+        例外：裂缝(LF)/挠度(ND)/风速(spfs,szfs) 等“0为正常值”的特征，恒为 0
+        属正常状态，不算故障。
+        注：故障时间段已在统计生成时剔除（build_chart_library 对温度/湿度类
+        剔除连续恒0段与零星0点），因此这里不再因 min==0 就判整行无效——
+        有正常数据段的传感器照常展示清洗后的统计值。"""
         if not isinstance(fstats, dict):
             return False
         try:
@@ -1845,8 +1848,6 @@ class BridgeData:
         if zero_ok:
             return False
         if abs(mx - mn) <= 1e-9:
-            return True
-        if mn == 0.0 and mx > 0.0:
             return True
         return False
 

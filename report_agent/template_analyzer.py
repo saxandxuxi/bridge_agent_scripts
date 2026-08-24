@@ -58,6 +58,40 @@ def iter_paragraphs(doc: Document):
             yield p
 
 
+_CAPTION_END = ("频率分布直方图", "时程曲线图", "时间序列图", "曲线图",
+                "直方图", "时程曲线", "频率分布图", "分布图", "曲线")
+_KEEP_END = ("布置图", "示意图", "平面图", "立面图", "断面图", "结构图",
+             "流程图", "系统图", "测点布置图")
+_LEADIN_END = ("如下图所示。", "如下图所示：", "如下表。", "如下表：",
+               "如下图所示", "如下表")
+
+
+def cleanup_redundant_captions(doc: Document) -> int:
+    """生成模版后清洗：删除未被替换成占位符的冗余图注文字。
+
+    规则：无编号、以 曲线图/直方图/时程曲线 等结尾，且不是
+    “…如下图所示。/如下表。”引导句、也不是原报告图纸标题（布置图/示意图等）
+    的段落，视为冗余图注删除（图表位置已由 {{chart.*}} 占位符接管）。
+    编号正规图注（图N.N-N …）不动。返回删除的段落数。
+    """
+    removed = 0
+    for para in iter_paragraphs(doc):
+        t = "".join(r.text or "" for r in para.runs).strip()
+        if not t:
+            continue
+        if t.startswith("{{") or re.match(r"^图\s*\d+[-.]\d+", t):
+            continue  # 占位符 / 编号正规图注
+        if any(t.endswith(x) for x in _LEADIN_END):
+            continue  # “…如下图所示。”引导句保留
+        if any(t.endswith(x) for x in _KEEP_END):
+            continue  # 原报告图纸标题保留
+        if any(t.endswith(x) for x in _CAPTION_END):
+            for r in para.runs:
+                r.text = ""
+            removed += 1
+    return removed
+
+
 def _classify(key: str) -> str:
     if key.startswith("stats."):
         return "stats"

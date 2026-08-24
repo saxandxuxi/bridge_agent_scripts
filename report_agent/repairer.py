@@ -17,12 +17,6 @@ from typing import Dict, List, Optional
 
 log = logging.getLogger("report-agent.repairer")
 
-_CAPTION_END = ("频率分布直方图", "时程曲线图", "时间序列图", "曲线图",
-                "直方图", "时程曲线", "频率分布图", "分布图", "曲线")
-_KEEP_TITLE_END = ("布置图", "示意图", "平面图", "立面图", "断面图",
-                   "结构图", "流程图", "系统图", "测点布置图")
-
-
 class ReportRepairer:
     def __init__(self, bridge, chart_images: Dict[str, str],
                  chart_captions: Dict[str, str],
@@ -61,7 +55,8 @@ class ReportRepairer:
                 log.info("跳过非启用修复类型：%s（审查已收窄到 图注删除/总结润色）",
                          rtype)
             elif rtype == "caption":
-                self._repair_caption(entry, out)
+                # 冗余图注删除已移到模版生成环节，报告生成不再删图注
+                log.info("跳过 caption 修复（冗余图注删除在模版生成阶段处理）")
             elif rtype == "summary":
                 self._repair_summary(entry, out)
             elif rtype == "unit":
@@ -106,32 +101,6 @@ class ReportRepairer:
         out["applied"].append(entry)
         log.info("修复 chart %s -> %s", target, new_path)
 
-    def _repair_caption(self, entry: Dict, out: Dict) -> None:
-        target = entry.get("target") or ""
-        hint = entry.get("hint") or ""
-        if not target:
-            out["needs_human"].append(entry)
-            return
-        if self._is_numbered_caption(target):
-            # 编号正规图注（图N.N-N …）一律不动：不删不改，忽略
-            log.info("跳过编号正规图注：%s", target[:40])
-            return
-        if self._is_redundant_caption(target):
-            # 无编号、紧挨正规图注的冗余图注：一律删除，不做替换
-            out["caption_removals"].append(target)
-            out["applied"].append(entry)
-            log.info("删除冗余图注：%s", target[:40])
-            return
-        if hint and hint == "删除" and len(target) >= 8:
-            # 非冗余图注也要求删除：仅当目标是完整图注文字时执行
-            out["caption_removals"].append(target)
-            out["applied"].append(entry)
-            log.info("删除图注文字：%s", target[:40])
-            return
-        # 其他（替换/短词等）一律不执行
-        log.info("跳过 caption 修复（仅允许删除冗余图注）：%s -> %s",
-                 target[:30], hint[:30])
-
     def _repair_summary(self, entry: Dict, out: Dict) -> None:
         target = entry.get("target") or ""
         # 只清总结缓存，下一轮 build 按季度统计/真实数据重新生成（确定性）
@@ -140,24 +109,6 @@ class ReportRepairer:
                 del self.bridge._summary_cache[key]
         out["applied"].append(entry)
         log.info("修复 summary：清除缓存 %s", target or "全部")
-
-    @staticmethod
-    def _is_redundant_caption(text: str) -> bool:
-        """无编号、以 曲线图/直方图/时程曲线 等结尾、且非原报告图纸标题
-        （布置图/示意图/平面图 等）的文字，判定为冗余图注，应删除。"""
-        t = str(text or "").strip()
-        if not 4 <= len(t) <= 40:
-            return False
-        if re.match(r"^图\s*\d+[-.]\d+", t):
-            return False   # 正规编号图注，不动
-        if any(t.endswith(x) for x in _KEEP_TITLE_END):
-            return False   # 原报告图纸标题（布置图/示意图…），保留
-        return any(t.endswith(x) for x in _CAPTION_END)
-
-    @staticmethod
-    def _is_numbered_caption(text: str) -> bool:
-        """是否以 图N.N-N 开头的编号正规图注。"""
-        return bool(re.match(r"^图\s*\d+[-.]\d+", str(text or "").strip()))
 
     def _hint_matches_sensor(self, hint: str, sensor_id: str) -> bool:
         """纠正后的位置词是否命中该传感器的监测部位/位置。"""

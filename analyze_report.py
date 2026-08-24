@@ -218,6 +218,17 @@ def main() -> int:
                      result["replaced_numbers"], result["skipped_numbers_split_runs"],
                      result["replaced_images"], result.get("replaced_chart_texts", 0),
                      result.get("replaced_texts", 0), len(analysis.get("data_values", {})))
+            # 模版清洗：删除未被替换成占位符的冗余图注文字
+            try:
+                from docx import Document as _Doc
+                from report_agent.template_analyzer import cleanup_redundant_captions
+                _tpl = _Doc(result["output"])
+                _n = cleanup_redundant_captions(_tpl)
+                if _n:
+                    _tpl.save(result["output"])
+                    log.info("模版清洗：删除 %d 处冗余图注", _n)
+            except Exception as _exc:  # noqa: BLE001
+                log.warning("模版冗余图注清洗失败: %s", _exc)
             # 模板审查：对照原文，检查占位符/方位/静态值/篡改
             try:
                 reviewer = ReportReviewer(llm_cfg)

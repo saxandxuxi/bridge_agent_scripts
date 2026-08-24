@@ -1144,25 +1144,6 @@ def _mask_zero_run_hours(hours, means, maxs, mins, runs):
     return ho, mo, xo, no
 
 
-def _drop_temp_zero_points(hours, means, maxs, mins, feature):
-    """温度/湿度类特征：剔除残留的 0 值点（连续段剔除后仍可能存在的零星0，
-    对温度/湿度是物理不可能值，多为缺失记0）。振动/位移/应变等保留 0。"""
-    m = re.search(r"\(([^)]+)\)$", str(feature or ""))
-    inner = (m.group(1) if m else "").lower()
-    if not ("temp" in inner or inner == "rh" or inner.startswith("rh")):
-        return hours, means, maxs, mins
-    ho, mo, xo, no = [], [], [], []
-    for i, v in enumerate(means):
-        try:
-            if abs(float(v)) <= 1e-9:
-                continue
-        except (TypeError, ValueError):
-            continue
-        ho.append(hours[i]); mo.append(means[i])
-        xo.append(maxs[i]); no.append(mins[i])
-    return ho, mo, xo, no
-
-
 def plot_time_series(sensor_id, sensor_name, feature, times, means,
                      out_path, shifts=None, replaced_indices=None,
                      replaced_range_indices=None, hour_level=True, gaps=None):
@@ -3016,9 +2997,6 @@ def main():
                                 _mask_zero_run_hours(
                                     native_hours, native_means,
                                     native_maxs, native_mins, zero_runs)
-                        _n_hours, _n_means, _n_maxs, _n_mins = \
-                            _drop_temp_zero_points(
-                                _n_hours, _n_means, _n_maxs, _n_mins, feature)
                         stats, day_dates, day_means, day_maxs, day_mins = \
                             compute_feature_stats(
                                 day_dates, day_means, day_maxs, day_mins,
@@ -3162,9 +3140,6 @@ def main():
                         _n_hours, _n_means, _n_maxs, _n_mins = \
                             _mask_zero_run_hours(
                                 hours, hmeans, hmaxs, hmins, zero_runs)
-                    _n_hours, _n_means, _n_maxs, _n_mins = \
-                        _drop_temp_zero_points(
-                            _n_hours, _n_means, _n_maxs, _n_mins, feature)
                     stats, day_dates, day_means, day_maxs, day_mins = \
                         compute_feature_stats(
                             day_dates, day_means, day_maxs, day_mins,

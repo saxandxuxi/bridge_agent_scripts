@@ -881,6 +881,8 @@ def _parse_template_worker(bridge_id: str, cfg_path: str,
     """后台执行 analyze_report.py，把成品报告重新解析成模板。"""
     st = _parsing.setdefault(bridge_id, {"running": False})
     try:
+        _parse_log = os.path.join(ROOT, "outputs", "logs",
+                                  f"template_parse_{bridge_id}.log")
         cfg = _raw_config(cfg_path)
         b = get_bridge(bridge_id, REGISTRY) or {}
         bname = ((cfg.get("bridge_data") or {}).get("bridge_name")
@@ -913,8 +915,45 @@ def _parse_template_worker(bridge_id: str, cfg_path: str,
                     analysis_path, ROOT).replace("\\", "/")
             _save_config(cfg, cfg_path)
             st["template"] = cfg["template"]
+            # 解析完成结果写日志（web 日志 + 独立日志文件）
+            log.info("模板解析完成: %s -> %s",
+                     os.path.basename(source_report), st["template"])
+            try:
+                with open(_parse_log, "a", encoding="utf-8") as fh:
+                    fh.write("%s 模板解析完成: %s -> %s\n" % (
+                        dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        os.path.basename(source_report), st["template"]))
+                    fh.write("  分析JSON: %s\n" % analysis_path)
+                    if os.path.isfile(analysis_path):
+                        try:
+                            with open(analysis_path, "r",
+                                      encoding="utf-8") as af:
+                                ad = json.load(af)
+                            s = ad.get("summary") or {}
+                            fh.write("  数字 替换%d/保留%d/待确认%d；图片 替换%d/"
+                                     "保留%d；图表文本 %d 处；data 占位 %d\n" % (
+                                         (s.get("numbers") or {}).get("replace", 0),
+                                         (s.get("numbers") or {}).get("keep", 0),
+                                         (s.get("numbers") or {}).get("review", 0),
+                                         (s.get("images") or {}).get("replace", 0),
+                                         (s.get("images") or {}).get("keep", 0),
+                                         s.get("chart_texts", 0),
+                                         len(ad.get("data_values", {}) or {})))
+                        except Exception:  # noqa: BLE001
+                            pass
+            except Exception as exc:  # noqa: BLE001
+                log.warning("模板解析日志写入失败: %s", exc)
         else:
             st["error"] = "模板解析失败，详见日志尾部"
+            try:
+                with open(_parse_log, "a", encoding="utf-8") as fh:
+                    fh.write("%s 模板解析失败: %s -> %s\n%s\n" % (
+                        dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        os.path.basename(source_report),
+                        os.path.basename(tpl_path),
+                        (out.decode("utf-8", errors="replace")[-2000:])))
+            except Exception:  # noqa: BLE001
+                pass
         st["finished_at"] = dt.datetime.now().isoformat(timespec="seconds")
     except Exception as exc:  # noqa: BLE001
         st["error"] = str(exc)
@@ -926,7 +965,11 @@ def _parse_template_worker(bridge_id: str, cfg_path: str,
 
 @app.route("/api/bridges/<bridge_id>/template/parse", methods=["POST"])
 def api_bridge_template_parse(bridge_id):
-    """重新解析成品报告 -> 生成新模板（后台执行，LLM 识别较慢）。"""
+    """重新解析成品报告 -> 生成新模板（后台执行，LLM 识别较慢）。
+
+    body 可传 source_report 指定 inputs/ 下某份报告；不传则用配置的
+    source_report。指定时会同步更新配置，后续生成报告使用该成品报告。
+    """
     auth = _require_token()
     if auth:
         return auth
@@ -935,9 +978,21 @@ def api_bridge_template_parse(bridge_id):
         return jsonify({"error": f"未找到桥梁 {bridge_id} 的配置"}), 404
     from report_agent.config import load_config
     cfg = load_config(cfg_path)
-    source_report = cfg.get("source_report", "")
+    data = request.get_json(silent=True) or {}
+    source_report = str(data.get("source_report") or "").strip() \
+        or cfg.get("source_report", "")
+    if not os.path.isabs(source_report):
+        source_report = os.path.join(ROOT, source_report)
     if not source_report or not os.path.isfile(source_report):
         return jsonify({"error": "尚未上传成品报告（source_report 为空或文件不存在）"}), 400
+    # 指定了 inputs/ 下的报告：同步更新配置的 source_report
+    if data.get("source_report"):
+        try:
+            raw = _raw_config(cfg_path)
+            raw["source_report"] = _portable_path(source_report)
+            _save_config(raw, cfg_path)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("更新 source_report 失败: %s", exc)
     st = _parsing.get(bridge_id)
     if st and st.get("running"):
         return jsonify({"error": "模板解析已在运行", "started_at": st.get("started_at")}), 409
@@ -952,6 +1007,30 @@ def api_bridge_template_parse(bridge_id):
     return jsonify({"ok": True, "started": True,
                     "source_report": source_report,
                     "started_at": _parsing[bridge_id]["started_at"]})
+
+
+@app.route("/api/bridges/<bridge_id>/input-reports")
+def api_bridge_input_reports(bridge_id):
+    """列出 inputs/ 下可一键解析生成模板的成品报告。"""
+    auth = _require_token()
+    if auth:
+        return auth
+    inputs_dir = os.path.join(ROOT, "inputs")
+    reports = []
+    if os.path.isdir(inputs_dir):
+        for f in sorted(os.listdir(inputs_dir)):
+            if (f.lower().endswith(".docx") and not f.startswith("~$")
+                    and "测点编号" not in f and "编号表" not in f
+                    and "对照" not in f):
+                p = os.path.join(inputs_dir, f)
+                reports.append({
+                    "name": f,
+                    "path": os.path.relpath(p, ROOT).replace("\\", "/"),
+                    "size": os.path.getsize(p),
+                    "mtime": dt.datetime.fromtimestamp(
+                        os.path.getmtime(p)).isoformat(timespec="seconds"),
+                })
+    return jsonify({"reports": reports, "inputs_dir": inputs_dir})
 
 
 @app.route("/api/bridges/<bridge_id>/parse/status")

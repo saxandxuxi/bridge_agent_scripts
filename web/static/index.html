@@ -181,6 +181,11 @@
           <input type="file" id="tplFile2" accept=".docx" style="max-width:260px">
           <button class="ghost" onclick="uploadTemplateLocal()">③ 上传本地解析模版</button>
         </div>
+        <div class="row">
+          <button class="ghost" onclick="parseInputReport()">① 已有报告解析（一键生成模版）</button>
+          <select id="inputReportSel" style="min-width:260px"></select>
+          <button class="ghost" onclick="loadInputReports()">刷新报告列表</button>
+        </div>
         <div id="parseStatus" class="muted"></div>
         <div id="parseResult" style="display:none;margin-top:10px"></div>
       </div>
@@ -420,7 +425,7 @@ function showTab(name) {
   if (!currentBridgeId()) { loadCurrentBridge(); return; }
   if (name === "run") { loadRunTemplates(); checkPeriod(); }
   if (name === "download") loadReports();
-  if (name === "upload") { $("srBridgeHint").textContent = "上传到当前桥：" + (STATE.bridge ? STATE.bridge.name : ""); resetUploadPanel(); }
+  if (name === "upload") { $("srBridgeHint").textContent = "上传到当前桥：" + (STATE.bridge ? STATE.bridge.name : ""); resetUploadPanel(); loadInputReports(); }
   if (name === "preprocess") loadPreprocessConfig();
   if (name === "config") loadConfig();
   if (name === "scheduler") loadScheduler();
@@ -1068,6 +1073,35 @@ function parseNewTemplate() {
       pollParse(bridgeId);
     })
     .catch(function (e) { showMsg(String(e), "err"); $("parseStatus").textContent = ""; });
+}
+
+function loadInputReports() {
+  var bridgeId = currentBridgeId();
+  if (!bridgeId) return;
+  api("/api/bridges/" + bridgeId + "/input-reports").then(function (r) {
+    var sel = $("inputReportSel");
+    sel.innerHTML = '<option value="">（选择 inputs/ 下报告）</option>';
+    (r.reports || []).forEach(function (rep) {
+      var o = document.createElement("option");
+      o.value = rep.path;
+      o.textContent = rep.name + "（" + rep.mtime.slice(0, 10) + "）";
+      sel.appendChild(o);
+    });
+  }).catch(function () {});
+}
+
+function parseInputReport() {
+  var bridgeId = currentUploadBridge();
+  var src = $("inputReportSel").value;
+  if (!bridgeId) { showMsg("请先选择当前桥", "err"); return; }
+  if (!src) { showMsg("请选择 inputs/ 下的成品报告", "err"); return; }
+  $("parseStatus").textContent = "正在解析所选成品报告生成新模版（LLM 识别，可能需要几分钟）…";
+  api("/api/bridges/" + bridgeId + "/template/parse", {
+    method: "POST", body: JSON.stringify({ source_report: src })
+  }).then(function (r) {
+    showMsg("模板解析已启动：" + r.source_report, "ok");
+    pollParse(bridgeId);
+  }).catch(function (e) { showMsg(String(e), "err"); $("parseStatus").textContent = ""; });
 }
 
 function pollParse(bridgeId) {
